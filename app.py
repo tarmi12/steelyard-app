@@ -1,23 +1,14 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
-import time
 
 # =====================================================
 # 🔐 ตั้งค่า Supabase (เปลี่ยนเป็นของจริงเมื่อพร้อม)
 # =====================================================
 SUPABASE_URL = "https://xxxxxxxxxxxx.supabase.co"
 SUPABASE_ANON_KEY = "your-anon-key-here"
-# ถ้าต้องการใช้ Supabase จริง ให้ import และสร้าง client
 # from supabase import create_client, Client
 # supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-
-# =====================================================
-# 🎨 ธีมสว่าง (Light Mode) – ตั้งค่าผ่าน config.toml
-#    หรือใส่ใน .streamlit/config.toml ของโปรเจกต์
-#    [theme]
-#    base="light"
-# =====================================================
 
 # =====================================================
 # 🧩 Session State
@@ -99,7 +90,8 @@ def sidebar():
 def page_purchase_entry():
     st.header("📥 บันทึกซื้อเข้าสิ้นวัน (เพิ่มสต็อก Physical / Reporting แยกตามเกรด)")
 
-    product_types = ["เหล็กเกรด A", "เหล็กเกรด B", "เศษเหล็กผสม"]  # TODO: ดึงจาก product_types
+    # ชนิดสินค้าตัวอย่าง (ภายหลังดึงจาก product_types)
+    product_types = ["เหล็กเกรด A", "เหล็กเกรด B", "เศษเหล็กผสม"]
 
     with st.form("purchase_entry_form"):
         purchase_date = st.date_input("วันที่ซื้อ", date.today())
@@ -192,14 +184,14 @@ def page_purchase_history():
         st.write("พิมพ์เอกสารอีกครั้ง (reprint)")
 
 # =====================================================
-# 🚚 3. สั่งโหลด (เลือกรถ, ดึงคนขับ/บริษัท, เลือกสินค้า, ไม่เลือก freight mode)
+# 🚚 3. สั่งโหลด (เลือกรถ, ดึงคนขับ/บริษัท, เลือกสินค้า, ไม่แสดง freight mode)
 # =====================================================
 def page_load_order():
     st.header("🚚 สั่งโหลด (จองคิว)")
     # TODO: ดึงทะเบียนจาก trucks
     truck_plate = st.selectbox("ทะเบียนรถ", ["80-1234", "80-5678"])
     if truck_plate:
-        # จำลองข้อมูลจากตาราง trucks (รวมบริษัทขนส่ง, วิธีคิดค่าขนส่ง – ดูจาก settings)
+        # จำลองข้อมูลจากตาราง trucks (รวมบริษัทขนส่ง)
         st.write("👨‍✈️ คนขับ: สมชาย  |  📞 081-234-5678  |  🏢 บริษัท: สมชายขนส่ง")
     st.markdown("---")
     st.subheader("รายการสินค้าที่จะโหลด")
@@ -222,13 +214,14 @@ def page_load_order():
         st.rerun()
 
 # =====================================================
-# ⚖️ 4. ชั่งออก (เลือก Load Order, Gross/Tare, Net คำนวณเอง, น้ำหนักปลายทาง, VAT)
+# ⚖️ 4. ชั่งออก (ไม่มีน้ำหนักปลายทาง, ราคาขาย, VAT; มีเลือกปลายทาง, วันที่ถึง, หมายเหตุ)
 # =====================================================
 def page_weigh_out():
     st.header("⚖️ ชั่งออก (ตัดสต็อกหน้าลานทันที)")
     load_order = st.selectbox("เลือก Load Order", ["LO0001", "LO0002"])
     if load_order:
         st.write("รถ: 80-1234 | สินค้า: เหล็กเกรด A | ปลายทาง: โรงงาน A")
+
     col1, col2, col3 = st.columns(3)
     with col1:
         gross = st.number_input("น้ำหนักหนัก (Gross) kg", min_value=0, value=15000)
@@ -237,12 +230,11 @@ def page_weigh_out():
     with col3:
         net = gross - tare if gross >= tare else 0
         st.metric("น้ำหนักสุทธิ (Net)", f"{net:,} kg")
-    dest_weight = st.number_input("น้ำหนักปลายทาง (kg) (ใส่เมื่อมีข้อมูล)", min_value=0, value=0)
-    transit_loss = net - dest_weight if net >= dest_weight else 0
-    if dest_weight > 0:
-        st.write(f"🚚 Transit Loss: {transit_loss:,} kg")
-    price_per_ton = st.number_input("ราคาขายต่อตัน (บาท)", min_value=0.0, value=8000.0)
-    vat_mode = st.radio("ประเภท VAT", ["ปกติ (มี VAT)", "นอกระบบ (No VAT)"])
+
+    # ข้อมูลเพิ่มเติมที่ขอ
+    destination = st.selectbox("โรงงานปลายทาง", ["โรงงาน A", "โรงงาน B", "โรงงาน C"])
+    arrival_date = st.date_input("วันที่ถึงปลายทาง", date.today())
+    remark = st.text_area("หมายเหตุ")
 
     if st.button("Preview & บันทึก"):
         # TODO: บันทึก weigh_out, ตัด PHYSICAL stock ทันที

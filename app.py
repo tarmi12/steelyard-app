@@ -1,6 +1,6 @@
 import streamlit as st
 
-# ========== ตั้งค่าหน้า ==========
+# ========== ตั้งค่าหน้า (ทำครั้งแรก) ==========
 st.set_page_config(page_title="ลานเหล็กไทย", page_icon="🏗️", layout="wide")
 
 # ========== Session State ==========
@@ -9,10 +9,23 @@ if "user" not in st.session_state:
 if "role" not in st.session_state:
     st.session_state.role = None
 
-# ========== หน้า Login จำลอง ==========
+# ========== ค่าเริ่มต้นสำหรับตั้งค่าระบบ ==========
+if "transit_loss_pct" not in st.session_state:
+    st.session_state.transit_loss_pct = 0.5          # 0.5%
+if "transit_loss_kg" not in st.session_state:
+    st.session_state.transit_loss_kg = 50            # 50 กก.
+if "penalty_rate_per_kg" not in st.session_state:
+    st.session_state.penalty_rate_per_kg = 10.0      # บาท/กก. เริ่มต้น 10 บาท
+if "freight_flat_rate" not in st.session_state:
+    st.session_state.freight_flat_rate = 3000.0      # เหมาเที่ยว
+if "freight_per_ton_rate" not in st.session_state:
+    st.session_state.freight_per_ton_rate = 100.0    # ต่อตัน
+if "default_base_weight" not in st.session_state:
+    st.session_state.default_base_weight = "ต้นทาง"  # หรือ "ปลายทาง"
+
+# ========== หน้า Login จำลอง (คงเดิม) ==========
 def login():
     st.title("🔐 เข้าสู่ระบบ - ลานเหล็กไทย")
-    st.markdown("---")
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("🧑‍💼 เจ้าของ", use_container_width=True):
@@ -30,12 +43,11 @@ def login():
             st.session_state.user = {"display_name": "เสมียน"}
             st.rerun()
 
-# ========== ถ้ายังไม่ login ==========
 if not st.session_state.user:
     login()
     st.stop()
 
-# ========== สร้าง Navigation ตาม Role ==========
+# ========== Navigation ตาม Role (คงเดิม) ==========
 role = st.session_state.role
 pages = []
 
@@ -50,13 +62,11 @@ if role in ["clerk", "manager", "owner"]:
         st.Page("pages/stock_balance.py", title="สต็อกคงเหลือ", icon="📦"),
         st.Page("pages/truck_management.py", title="จัดการรถ/คนขับ", icon="🚘"),
     ]
-
 if role in ["clerk", "manager"]:
     pages += [
         st.Page("pages/receipt_entry.py", title="บันทึกเงินโอน", icon="💵"),
         st.Page("pages/freight_payment.py", title="จ่ายค่าขนส่ง", icon="🚛"),
     ]
-
 if role in ["manager", "owner"]:
     pages += [
         st.Page("pages/manual_adjustment.py", title="ปรับยอดสต็อกด้วยมือ", icon="🔧"),
@@ -65,13 +75,11 @@ if role in ["manager", "owner"]:
         st.Page("pages/report_freight.py", title="รายงานค่าขนส่ง/ค่าปรับ", icon="📉"),
         st.Page("pages/report_debtors.py", title="รายงานสถานะลูกหนี้-เจ้าหนี้", icon="📑"),
     ]
-
 if role == "owner":
     pages += [
         st.Page("pages/settings.py", title="ตั้งค่าระบบ", icon="⚙️"),
         st.Page("pages/user_management.py", title="จัดการผู้ใช้", icon="👥"),
     ]
 
-# ========== แสดง Sidebar และ เนื้อหาหน้าที่เลือก ==========
 pg = st.navigation(pages)
 pg.run()

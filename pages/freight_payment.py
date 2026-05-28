@@ -4,7 +4,12 @@ from datetime import date
 
 st.header("🚛 จ่ายค่าขนส่งให้สิบล้อ (Freight Payment)")
 
-# --- จำลองข้อมูล Load Order ที่เสร็จแล้วและยังไม่ได้จ่าย ---
+# --- ดึงค่าจาก session_state (ตั้งค่าในหน้า Settings) ---
+pct_threshold = st.session_state.transit_loss_pct
+kg_threshold = st.session_state.transit_loss_kg
+penalty_rate = st.session_state.penalty_rate_per_kg
+
+# --- จำลองข้อมูล Load Order (คงเดิม) ---
 demo_loads = [
     {
         "load_id": "LO0001",
@@ -12,7 +17,7 @@ demo_loads = [
         "driver": "สมชาย",
         "company": "สมชายขนส่ง",
         "freight_mode": "FLAT_RATE",
-        "rate": 3000.00,
+        "rate": st.session_state.freight_flat_rate,  # ดึงจาก settings
         "base_weight_option": None,
         "net_origin": 15300,
         "net_dest": 15000,
@@ -27,7 +32,7 @@ demo_loads = [
         "driver": "สมศักดิ์",
         "company": "ศักดิ์ขนส่ง",
         "freight_mode": "PER_TON",
-        "rate": 100.00,
+        "rate": st.session_state.freight_per_ton_rate,
         "base_weight_option": "ORIGIN",
         "net_origin": 16200,
         "net_dest": 16000,
@@ -42,7 +47,7 @@ demo_loads = [
         "driver": "สมบัติ",
         "company": "บัติโลจิสติกส์",
         "freight_mode": "PER_TON",
-        "rate": 110.00,
+        "rate": st.session_state.freight_per_ton_rate,
         "base_weight_option": "DESTINATION",
         "net_origin": 14000,
         "net_dest": 13800,
@@ -53,13 +58,7 @@ demo_loads = [
     }
 ]
 
-# --- ดึงค่าตั้งต้นจาก settings (จำลอง) ---
-transit_loss_threshold_pct = 0.5  # 0.5%
-transit_loss_threshold_kg = 50    # 50 กก.
-penalty_rate_per_kg = 10.0        # บาท ต่อ กก. ที่เกิน
-
 st.subheader("📋 รายการ Load Order ที่พร้อมจ่ายค่าขนส่ง")
-
 df = pd.DataFrame([
     {
         "Load ID": l["load_id"],
@@ -92,29 +91,26 @@ if selected_ids:
     total_net_pay = 0.0
 
     for load in selected_loads:
-        # คำนวณค่าขนส่งตามรูปแบบ
+        # คำนวณค่าขนส่ง
         if load["freight_mode"] == "FLAT_RATE":
             freight = load["rate"]
             weight_used = None
-        else:  # PER_TON
-            # เลือกน้ำหนักตาม base_weight_option
+        else:
             if load["base_weight_option"] == "ORIGIN":
                 weight_used = load["net_origin"]
-            else:  # DESTINATION
+            else:
                 weight_used = load["net_dest"]
             freight = (weight_used / 1000) * load["rate"]
 
-        # คำนวณค่าปรับ
+        # คำนวณค่าปรับ (ใช้ session_state)
         transit_loss = load["transit_loss"]
-        max_loss_pct = (transit_loss_threshold_pct / 100) * load["net_origin"]
-        max_allowed = min(max_loss_pct, transit_loss_threshold_kg)
+        max_loss_pct = (pct_threshold / 100) * load["net_origin"]
+        max_allowed = min(max_loss_pct, kg_threshold)
         penalty = 0.0
         if transit_loss > max_allowed:
             excess_kg = transit_loss - max_allowed
-            penalty = excess_kg * penalty_rate_per_kg
-        net_pay = freight - penalty
-        if net_pay < 0:
-            net_pay = 0.0
+            penalty = excess_kg * penalty_rate
+        net_pay = max(freight - penalty, 0.0)
 
         payment_details.append({
             "load": load,
@@ -139,14 +135,16 @@ if selected_ids:
                     st.write(f"**น้ำหนักที่ใช้:** {detail['weight_used']:,} kg ({detail['weight_used']/1000:.2f} ตัน)")
                     st.write(f"**อัตรา:** {load['rate']:,.2f} บาท/ตัน")
                 st.write(f"**ค่าขนส่งก่อนหัก:** {detail['freight']:,.2f} บาท")
-                st.write(f"**Transit Loss:** {load['transit_loss']} kg (เกณฑ์ยอมรับ {max_allowed:.0f} kg)")
+                st.write(f"**Transit Loss:** {load['transit_loss']} kg")
+                st.write(f"**เกณฑ์ยอมรับ:** สูงสุด {max_allowed:.0f} kg (น้อยกว่าระหว่าง {pct_threshold}% ของต้นทาง หรือ {kg_threshold} กก.)")
+                st.write(f"**อัตราค่าปรับ:** {penalty_rate} บาท/กก. (ส่วนที่เกิน)")
                 st.write(f"**ค่าปรับ:** {detail['penalty']:,.2f} บาท")
             with col2:
                 st.write(f"**Impurity:** {load['impurity_kg']} kg")
                 st.write(f"**หมายเหตุจากเคลียร์บิล:** {load['clearing_remark']}")
                 st.metric("ค่าขนส่งสุทธิ (Net Pay)", f"{detail['net_pay']:,.2f} บาท")
 
-            # อนุญาตให้เปลี่ยนฐานน้ำหนักย้อนหลัง (ถ้าเป็น PER_TON)
+            # เปลี่ยนฐานน้ำหนักย้อนหลัง
             if load["freight_mode"] == "PER_TON":
                 new_base = st.radio(
                     "เปลี่ยนฐานน้ำหนักสำหรับเที่ยวนี้?",
@@ -169,7 +167,7 @@ if selected_ids:
         if payment_method == "โอนธนาคาร":
             bank_ref = st.text_input("เลขที่อ้างอิงการโอน")
         paid_date = st.date_input("วันที่จ่าย", date.today())
-        payment_remark = st.text_area("หมายเหตุการจ่าย (เพิ่มเติม)", value="")
+        payment_remark = st.text_area("หมายเหตุการจ่าย (เพิ่มเติม)")
 
         st.markdown("---")
         st.write("**ตัวอย่างก่อนบันทึก (Preview)**")
@@ -179,11 +177,10 @@ if selected_ids:
 
         submitted = st.form_submit_button("✅ ยืนยันการจ่าย")
         if submitted:
-            # TODO: บันทึกข้อมูลลงตาราง freight_payments, อัปเดตสถานะเป็น PAID
+            # TODO: บันทึก freight_payments
             st.success("บันทึกการจ่ายค่าขนส่งเรียบร้อย!")
             st.balloons()
 
-    # ปุ่มพิมพ์ใบสำคัญจ่าย
     if st.button("🖨️ พิมพ์ใบสำคัญจ่าย"):
         st.write("พิมพ์ใบสำคัญจ่าย (จำลอง)")
 else:

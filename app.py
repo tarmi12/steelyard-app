@@ -8,7 +8,7 @@ if "user" not in st.session_state:
 if "role" not in st.session_state:
     st.session_state.role = None
 
-# ---- ค่าเริ่มต้นสำหรับตั้งค่าระบบ (หากยังไม่เคยตั้ง) ----
+# ---- ค่าเริ่มต้นสำหรับตั้งค่าระบบ ----
 if "transit_loss_pct" not in st.session_state:
     st.session_state.transit_loss_pct = 0.5
 if "transit_loss_kg" not in st.session_state:
@@ -22,15 +22,15 @@ if "freight_per_ton_rate" not in st.session_state:
 if "default_base_weight" not in st.session_state:
     st.session_state.default_base_weight = "ต้นทาง"
 
-# ---- ค่าเกี่ยวกับ Google Drive / LINE (ใหม่) ----
+# Google Drive / LINE settings
 if "google_drive_folder_id" not in st.session_state:
     st.session_state.google_drive_folder_id = ""
 if "line_channel_token" not in st.session_state:
     st.session_state.line_channel_token = ""
 if "line_oa_url" not in st.session_state:
-    st.session_state.line_oa_url = "https://line.me/R/ti/p/@your_bot_id"  # เปลี่ยนตามจริง
+    st.session_state.line_oa_url = "https://line.me/R/ti/p/@your_bot_id"
 
-# ---- หน้า Login (จำลอง) ----
+# ---- Login จำลอง ----
 def login():
     st.title("🔐 เข้าสู่ระบบ - ลานเหล็กไทย")
     col1, col2, col3 = st.columns(3)
@@ -54,7 +54,7 @@ if not st.session_state.user:
     login()
     st.stop()
 
-# ---- Navigation ----
+# ---- Navigation ตาม Role ----
 role = st.session_state.role
 pages = []
 
@@ -69,11 +69,13 @@ if role in ["clerk", "manager", "owner"]:
         st.Page("pages/stock_balance.py", title="สต็อกคงเหลือ", icon="📦"),
         st.Page("pages/truck_management.py", title="จัดการรถ/คนขับ", icon="🚘"),
     ]
+
 if role in ["clerk", "manager"]:
     pages += [
         st.Page("pages/receipt_entry.py", title="บันทึกเงินโอน", icon="💵"),
         st.Page("pages/freight_payment.py", title="จ่ายค่าขนส่ง", icon="🚛"),
     ]
+
 if role in ["manager", "owner"]:
     pages += [
         st.Page("pages/manual_adjustment.py", title="ปรับยอดสต็อกด้วยมือ", icon="🔧"),
@@ -82,6 +84,7 @@ if role in ["manager", "owner"]:
         st.Page("pages/report_freight.py", title="รายงานค่าขนส่ง/ค่าปรับ", icon="📉"),
         st.Page("pages/report_debtors.py", title="รายงานสถานะลูกหนี้-เจ้าหนี้", icon="📑"),
     ]
+
 if role == "owner":
     pages += [
         st.Page("pages/settings.py", title="ตั้งค่าระบบ", icon="⚙️"),

@@ -6,10 +6,8 @@ from PIL import Image
 
 st.header("⚖️ ชั่งออก (ตัดสต็อกหน้าลานทันที)")
 
-# --- จำลอง Load Order ---
 load_orders = ["LO0001", "LO0002"]
 selected_lo = st.selectbox("เลือก Load Order", load_orders)
-
 if selected_lo:
     st.write("รถ: 80-1234 | สินค้า: เหล็กเกรด A | ปลายทาง: โรงงาน A")
 
@@ -22,7 +20,6 @@ with col3:
     net = gross - tare if gross >= tare else 0
     st.metric("น้ำหนักสุทธิ (Net)", f"{net:,} kg")
 
-# ---- ข้อมูลเพิ่มเติม ----
 destination = st.selectbox("โรงงานปลายทาง", ["โรงงาน A", "โรงงาน B", "โรงงาน C"])
 arrival_date = st.date_input("วันที่ถึงปลายทาง", date.today())
 remark = st.text_area("หมายเหตุ")
@@ -30,22 +27,18 @@ remark = st.text_area("หมายเหตุ")
 if st.button("Preview & บันทึก"):
     # TODO: บันทึก weigh_out, ตัด Physical Stock
     st.success("ชั่งออกเรียบร้อย ตัด Physical Stock แล้ว")
-    st.session_state.weigh_out_id = selected_lo + "_WO001"  # จำลองเลขเอกสาร
+    st.session_state.weigh_out_id = selected_lo + "_WO001"
     st.session_state.print_ready = True
 
-# ---- พิมพ์สลิปพร้อม QR Code ----
 if st.session_state.get("print_ready"):
     st.markdown("---")
     st.subheader("🖨️ สลิปชั่งออก (80mm)")
 
-    # สร้าง QR Code ไปยัง LINE OA
     line_url = st.session_state.get("line_oa_url", "https://line.me/R/ti/p/@your_bot_id")
     qr = qrcode.QRCode(version=1, box_size=6, border=2)
     qr.add_data(line_url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
-
-    # แสดง QR Code
     buf = BytesIO()
     img.save(buf, format="PNG")
     st.image(buf, width=200, caption="สแกนเพื่อส่งหลักฐานปลายทางผ่าน LINE")
@@ -58,9 +51,8 @@ if st.session_state.get("print_ready"):
     st.write(f"**หมายเหตุ:** {remark}")
 
     if st.button("พิมพ์สลิปอีกครั้ง"):
-        st.write("พิมพ์...")  # ในที่นี้สมมติว่าใช้ browser print
+        st.write("พิมพ์...")
 
-    # เคลียร์ state
     if st.button("เสร็จสิ้น"):
         st.session_state.print_ready = False
         st.session_state.weigh_out_id = None

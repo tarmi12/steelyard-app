@@ -1,29 +1,36 @@
 import streamlit as st
 
-# ========== ตั้งค่าหน้า (ทำครั้งแรก) ==========
 st.set_page_config(page_title="ลานเหล็กไทย", page_icon="🏗️", layout="wide")
 
-# ========== Session State ==========
+# ---- Session State ----
 if "user" not in st.session_state:
     st.session_state.user = None
 if "role" not in st.session_state:
     st.session_state.role = None
 
-# ========== ค่าเริ่มต้นสำหรับตั้งค่าระบบ ==========
+# ---- ค่าเริ่มต้นสำหรับตั้งค่าระบบ (หากยังไม่เคยตั้ง) ----
 if "transit_loss_pct" not in st.session_state:
-    st.session_state.transit_loss_pct = 0.5          # 0.5%
+    st.session_state.transit_loss_pct = 0.5
 if "transit_loss_kg" not in st.session_state:
-    st.session_state.transit_loss_kg = 50            # 50 กก.
+    st.session_state.transit_loss_kg = 50
 if "penalty_rate_per_kg" not in st.session_state:
-    st.session_state.penalty_rate_per_kg = 10.0      # บาท/กก. เริ่มต้น 10 บาท
+    st.session_state.penalty_rate_per_kg = 10.0
 if "freight_flat_rate" not in st.session_state:
-    st.session_state.freight_flat_rate = 3000.0      # เหมาเที่ยว
+    st.session_state.freight_flat_rate = 3000.0
 if "freight_per_ton_rate" not in st.session_state:
-    st.session_state.freight_per_ton_rate = 100.0    # ต่อตัน
+    st.session_state.freight_per_ton_rate = 100.0
 if "default_base_weight" not in st.session_state:
-    st.session_state.default_base_weight = "ต้นทาง"  # หรือ "ปลายทาง"
+    st.session_state.default_base_weight = "ต้นทาง"
 
-# ========== หน้า Login จำลอง (คงเดิม) ==========
+# ---- ค่าเกี่ยวกับ Google Drive / LINE (ใหม่) ----
+if "google_drive_folder_id" not in st.session_state:
+    st.session_state.google_drive_folder_id = ""
+if "line_channel_token" not in st.session_state:
+    st.session_state.line_channel_token = ""
+if "line_oa_url" not in st.session_state:
+    st.session_state.line_oa_url = "https://line.me/R/ti/p/@your_bot_id"  # เปลี่ยนตามจริง
+
+# ---- หน้า Login (จำลอง) ----
 def login():
     st.title("🔐 เข้าสู่ระบบ - ลานเหล็กไทย")
     col1, col2, col3 = st.columns(3)
@@ -47,7 +54,7 @@ if not st.session_state.user:
     login()
     st.stop()
 
-# ========== Navigation ตาม Role (คงเดิม) ==========
+# ---- Navigation ----
 role = st.session_state.role
 pages = []
 

@@ -1,79 +1,94 @@
 import streamlit as st
 from datetime import date
+from supabase import create_client, Client
 
-st.header("💰 เคลียร์บิลปลายทาง (เปรียบเทียบน้ำหนักต้นทาง-ปลายทาง)")
+st.header("💰 เคลียร์บิลปลายทาง (บันทึกข้อมูลสรุปและตัดสต็อก Reporting)")
 
-weigh_out_options = [
-    {"id": "WO0001", "load_order": "LO0001", "truck": "80-1234", "product": "เหล็กเกรด A",
-     "gross_origin": 21000, "tare_origin": 5700, "net_origin": 15300, "destination": "โรงงาน A", "date": date.today()},
-    {"id": "WO0002", "load_order": "LO0002", "truck": "80-5678", "product": "เหล็กเกรด B",
-     "gross_origin": 22000, "tare_origin": 5800, "net_origin": 16200, "destination": "โรงงาน B", "date": date.today()},
-]
-wo_dict = {f"{wo['id']} ({wo['truck']})": wo for wo in weigh_out_options}
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
 
-selected_wo_label = st.selectbox("เลือก Weigh Out ที่ต้องการเคลียร์บิล", list(wo_dict.keys()))
-selected_wo = wo_dict[selected_wo_label]
+# ดึงข้อมูลรถชั่งออกที่ยังไม่เคยทำเรื่องเคลียร์บิลจริง
+try:
+    wo_res = supabase.table("weigh_out").select("id, net_weight, load_orders(trucks(plate), product_types(name)), factories(name)").execute()
+    cleared_res = supabase.table("sales_clearing").select("weigh_out_id").execute()
+    cleared_ids = [c["weigh_out_id"] for c in cleared_res.data]
+    
+    available_wo = {f"บิลชั่งออก WO-{w['id']} - รถ {w['load_orders']['trucks']['plate']} ({w['factories']['name']})": w 
+                    for w in wo_res.data if w["id"] not in cleared_ids}
+except Exception as e:
+    st.error(f"ไม่สามารถดึงข้อมูลรายการเคลียร์บิลได้: {e}")
+    available_wo = {}
 
-st.subheader("🚛 ข้อมูลต้นทาง (Weigh Out)")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("ทะเบียนรถ", selected_wo["truck"])
-col2.metric("สินค้า", selected_wo["product"])
-col3.metric("โรงงานปลายทาง", selected_wo["destination"])
-col4.metric("วันที่ชั่งออก", str(selected_wo["date"]))
+selected_label = st.selectbox("เลือกเอกสารใบชั่งออกที่ต้องการเคลียร์ยอดบิลค้าส่ง", list(available_wo.keys()))
 
-st.markdown("---")
-st.subheader("⚖️ เปรียบเทียบน้ำหนักต้นทาง – ปลายทาง")
-
-with st.form("sales_clearing_form"):
-    st.write("**น้ำหนัก ณ ต้นทาง (ลานเหล็กไทย)**")
-    col_o1, col_o2, col_o3 = st.columns(3)
-    col_o1.metric("Gross (kg)", f"{selected_wo['gross_origin']:,}")
-    col_o2.metric("Tare (kg)", f"{selected_wo['tare_origin']:,}")
-    col_o3.metric("Net (kg)", f"{selected_wo['net_origin']:,}")
-
-    st.write("**น้ำหนัก ณ ปลายทาง (กรอกจากใบชั่งโรงงาน)**")
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-        gross_dest = st.number_input("Gross ปลายทาง (kg)", min_value=0, value=20000)
-    with col_d2:
-        tare_dest = st.number_input("Tare ปลายทาง (kg)", min_value=0, value=5500)
-    net_dest = gross_dest - tare_dest if gross_dest >= tare_dest else 0
-    st.metric("Net ปลายทาง (kg)", f"{net_dest:,}")
-
-    transit_loss = selected_wo["net_origin"] - net_dest
-    if transit_loss >= 0:
-        st.warning(f"🚨 น้ำหนักหายระหว่างทาง: {transit_loss:,} kg")
-    else:
-        st.success(f"✅ น้ำหนักเพิ่มขึ้น: {abs(transit_loss):,} kg")
-
-    impurity_kg = st.number_input("น้ำหนักสิ่งเจือปน (kg) (หักจาก Net ปลายทาง)", min_value=0, value=0, step=10)
-    net_billable = max(net_dest - impurity_kg, 0)
-    st.metric("น้ำหนักสุทธิที่คิดเงิน (Net Billable)", f"{net_billable:,} kg")
-
-    remarks = st.text_area("หมายเหตุ (สาเหตุน้ำหนักหาย / ข้อมูลเพิ่มเติม)")
-
-    sale_type = st.radio("ประเภทบิล (VAT)", ["ปกติ (มี VAT)", "นอกระบบ (No VAT)"])
-    price_per_ton = st.number_input("ราคาขายต่อตัน (บาท)", min_value=0.0, value=8000.0, step=100.0)
-    discount = st.number_input("ส่วนลด (บาท)", min_value=0.0, value=0.0)
-
-    total_amount = (net_billable / 1000) * price_per_ton - discount
-    vat_amount = 0
-    if sale_type == "ปกติ (มี VAT)":
-        vat_amount = round(total_amount * 0.07, 2)
-    grand_total = total_amount + vat_amount
-
-    st.markdown("---")
-    st.subheader("📋 ตัวอย่างก่อนบันทึก (Preview)")
-    col_p1, col_p2, col_p3 = st.columns(3)
-    col_p1.metric("มูลค่าก่อน VAT", f"{total_amount:,.2f} บาท")
-    col_p2.metric("VAT (7%)", f"{vat_amount:,.2f} บาท")
-    col_p3.metric("รวมสุทธิ", f"{grand_total:,.2f} บาท")
-
-    submitted = st.form_submit_button("✅ ยืนยันเคลียร์บิล")
-    if submitted:
-        # TODO: บันทึก sales_clearing, destination_weigh_in, inventory_transactions
-        st.success(f"เคลียร์บิล {selected_wo['id']} เรียบร้อย!")
-        st.balloons()
-
-if st.button("🖨️ พิมพ์ใบเคลียร์บิล"):
-    st.write("พิมพ์เอกสาร (จำลอง)")
+if selected_label:
+    wo = available_wo[selected_label]
+    
+    st.subheader("⚖️ รายละเอียดและผลต่างน้ำหนักจริง")
+    st.write(f"**น้ำหนักสุทธิจากต้นทาง (ลานเหล็กไทย):** {wo['net_weight']:,} kg")
+    
+    with st.form("real_sales_clearing_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            gross_dest = st.number_input("น้ำหนักรวมปลายทาง (Gross จากโรงงาน)", min_value=0, step=10)
+        with col2:
+            tare_dest = st.number_input("น้ำหนักรถเปล่าปลายทาง (Tare จากโรงงาน)", min_value=0, step=10)
+            
+        net_dest = gross_dest - tare_dest if gross_dest >= tare_dest else 0
+        st.metric("น้ำหนักสุทธิปลายทาง (Net Destination)", f"{net_dest:,} kg")
+        
+        loss = wo['net_weight'] - net_dest
+        if loss >= 0:
+            st.warning(f"🚨 น้ำหนักสูญหายระหว่างขนส่ง: {loss:,} kg")
+        else:
+            st.success(f"✅ น้ำหนักเพิ่มขึ้น: {abs(loss):,} kg")
+            
+        impurity = st.number_input("หักน้ำหนักสิ่งเจือปนหน้าโรงงาน (Impurity kg)", min_value=0, step=1)
+        net_billable = max(net_dest - impurity, 0)
+        st.metric("น้ำหนักสุทธิรวมคิดเงิน (Net Billable Weight)", f"{net_billable:,} kg")
+        
+        st.markdown("---")
+        sale_type = st.radio("ประเภทบิลคิดภาษีมูลค่าเพิ่ม", ["NORMAL", "NO_VAT"])
+        price_per_ton = st.number_input("ราคาซื้อขายจริงต่อตัน (บาท)", min_value=0.0, step=100.0)
+        discount = st.number_input("ส่วนลดหน้าบิล (บาท)", min_value=0.0, step=10.0)
+        remark = st.text_area("หมายเหตุประกอบการเคลียร์บิล")
+        
+        # คำนวณรายรับและภาษีมูลค่าเพิ่มจริง
+        sub_total = (net_billable / 1000) * price_per_ton - discount
+        vat = round(sub_total * 0.07, 2) if sale_type == "NORMAL" else 0.0
+        grand_total = sub_total + vat
+        
+        st.metric("ยอดสุทธิที่ต้องเรียกเก็บจากโรงงาน (Grand Total)", f"{grand_total:,.2f} บาท (Vat: {vat:,.2f})")
+        
+        submitted = st.form_submit_button("✅ ยืนยันปิดบิลและตัดยอดบัญชีสต็อกคู่")
+        
+        if submitted:
+            try:
+                # 1. บันทึกน้ำหนักและผลตรวจสอบปลายทาง
+                supabase.table("destination_weigh_in").insert({
+                    "weigh_out_id": wo["id"],
+                    "received_weight": net_dest,
+                    "impurity_kg": impurity,
+                    "net_billable_weight": net_billable,
+                    "scan_method": "Manual",
+                    "remark": remark
+                }).execute()
+                
+                # 2. บันทึกยอดตั้งลูกหนี้ในตารางการเงิน
+                supabase.table("sales_clearing").insert({
+                    "weigh_out_id": wo["id"],
+                    "sale_type": sale_type,
+                    "final_price_per_ton": price_per_ton,
+                    "total_amount": sub_total,
+                    "vat_amount": vat,
+                    "discount": discount,
+                    "clearing_date": str(date.today()),
+                    "remark": remark,
+                    "created_by": st.session_state.user_id
+                }).execute()
+                
+                st.success("🎉 บันทึกการเคลียร์บิลและตัดสต็อกฝั่ง Reporting เรียบร้อยแล้ว!")
+                st.rerun()
+            except Exception as error:
+                st.error(f"ไม่สามารถทำรายการได้: {error}")

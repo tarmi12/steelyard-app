@@ -1,68 +1,79 @@
 import streamlit as st
+from datetime import date
+from supabase import create_client, Client
 
-if "trucks_list" not in st.session_state:
-    st.session_state.trucks_list = [
-        {"plate": "80-1234", "driver": "สมชาย", "phone": "081-234-5678", "company": "สมชายขนส่ง", "empty_weight": 5500, "freight_method": "เหมาเที่ยว", "freight_rate": 3000.0},
-        {"plate": "80-5678", "driver": "สมศักดิ์", "phone": "089-876-5432", "company": "ศักดิ์ขนส่ง", "empty_weight": 5800, "freight_method": "บาทต่อตัน", "freight_rate": 100.0},
-        {"plate": "80-9999", "driver": "สมบัติ", "phone": "082-111-2222", "company": "บัติโลจิสติกส์", "empty_weight": 6000, "freight_method": "เหมาเที่ยว", "freight_rate": 3200.0},
-    ]
+st.header("🚚 สั่งโหลดเหล็กขึ้นรถ (จองคิวรถวิ่งงานจริง)")
 
-st.header("🚚 สั่งโหลด (จองคิว)")
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
 
-st.subheader("🔍 ค้นหารถ (ทะเบียน / บริษัท / คนขับ)")
-search_term = st.text_input("พิมพ์คำค้นหา")
+# ---- 1. ดึงข้อมูลรถและประเภทสินค้าจาก Database จริง ----
+try:
+    truck_res = supabase.table("trucks").select("id, plate, driver_name, company, freight_method, freight_rate, empty_weight").execute()
+    trucks_list = truck_res.data
+    
+    prod_res = supabase.table("product_types").select("id, name").execute()
+    products = prod_res.data
+except Exception as e:
+    st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลฐานข้อมูล: {e}")
+    trucks_list, products = [], []
 
-filtered_trucks = []
-if search_term:
-    term = search_term.lower()
-    filtered_trucks = [t for t in st.session_state.trucks_list if term in t["plate"].lower() or term in t["company"].lower() or term in t["driver"].lower()]
+# ---- 2. ค้นหาและเลือกทะเบียนรถ ----
+st.subheader("🔍 เลือกทะเบียนรถที่เข้าคิวงาน")
+if not trucks_list:
+    st.warning("⚠️ ยังไม่มีรถในระบบ กรุณาเพิ่มรถที่หน้าเมนู 'จัดการรถ/คนขับ' ก่อนครับ")
 else:
-    filtered_trucks = st.session_state.trucks_list
-
-if not filtered_trucks:
-    st.warning("ไม่พบรถที่ตรงกับคำค้นหา")
-    selected_truck = None
-else:
-    option_label = [f"{t['plate']} | {t['company']} | {t['driver']}" for t in filtered_trucks]
-    selected_label = st.radio("เลือกคันที่ต้องการ", option_label)
-    selected_index = option_label.index(selected_label)
-    selected_truck = filtered_trucks[selected_index]
-
-if selected_truck:
-    st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("ทะเบียนรถ", selected_truck["plate"])
-    col2.metric("คนขับ", selected_truck["driver"])
-    col3.metric("เบอร์โทร", selected_truck["phone"])
-    st.write(f"**บริษัทขนส่ง:** {selected_truck['company']}")
-    st.write(f"**น้ำหนักรถเปล่า:** {selected_truck['empty_weight']} kg")
-    st.write(f"**วิธีคิดค่าขนส่ง:** {selected_truck['freight_method']} (อัตรา: {selected_truck['freight_rate']:,.2f})")
+    truck_options = {f"{t['plate']} | {t['company']} | คนขับ: {t['driver_name']}": t for t in trucks_list}
+    selected_truck_label = st.selectbox("พิมพ์ค้นหาหรือเลือกทะเบียนรถ", list(truck_options.keys()))
+    selected_truck = truck_options[selected_truck_label]
 
     st.markdown("---")
-    st.subheader("📦 สินค้าที่จะโหลด")
-    if "load_items" not in st.session_state:
-        st.session_state.load_items = []
+    
+    # ---- 3. แสดงข้อมูลรถที่เลือกและกรอกสินค้าที่จะสั่งโหลด ----
+    st.subheader("📦 รายละเอียดการสั่งโหลดงาน")
+    
+    with st.form("real_load_order_form"):
+        col1, col2, col3 = st.columns(3)
+        col1.metric("ทะเบียนรถ", selected_truck["plate"])
+        col2.metric("คนขับรถ", selected_truck["driver_name"])
+        col3.metric("น้ำหนักรถเปล่า (เริ่มต้น)", f"{selected_truck['empty_weight']:,} kg")
+        
+        st.write(f"**วิธีคิดค่าขนส่งเริ่มต้น:** {'เหมาเที่ยว' if selected_truck['freight_method'] == 'FLAT_RATE' else 'ราคาต่อตัน'} (อัตรา: {float(selected_truck['freight_rate']):,.2f} บาท)")
+        st.markdown("---")
+        
+        # เลือกประเภทสินค้าจริงจากฐานข้อมูล
+        prod_options = {p["name"]: p["id"] for p in products}
+        selected_prod_name = st.selectbox("เลือกประเภทเหล็ก/สินค้าที่ต้องการโหลดขึ้นรถ", list(prod_options.keys()))
+        
+        # ปรับเปลี่ยนเรทค่าขนส่งหน้างานได้ เผื่อกรณีพิเศษ
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            freight_mode = st.radio("รูปแบบค่าขนส่งสำหรับเที่ยวนี้", ["FLAT_RATE", "PER_TON"],
+                                    format_func=lambda x: "เหมาเที่ยว" if x == "FLAT_RATE" else "ต่อตันน้ำหนัก",
+                                    index=0 if selected_truck["freight_method"] == "FLAT_RATE" else 1)
+        with col_f2:
+            freight_rate = st.number_input("แก้ไขอัตราค่าขนส่งเที่ยวนี้ (บาท)", min_value=0.0, value=float(selected_truck["freight_rate"]))
+            
+        base_weight_option = st.radio("กรณีคิดเงินต่อตัน ให้ใช้ฐานน้ำหนักจากที่ใด", ["ORIGIN", "DESTINATION"], 
+                                      format_func=lambda x: "น้ำหนักต้นทาง (ลานเหล็กไทย)" if x == "ORIGIN" else "น้ำหนักปลายทาง (โรงงานรับซื้อ)",
+                                      index=0)
 
-    col_prod, col_wt, col_btn = st.columns([2, 1, 1])
-    with col_prod:
-        product = st.selectbox("ประเภทสินค้า", ["เหล็กเกรด A", "เหล็กเกรด B", "เศษเหล็กผสม"])
-    with col_wt:
-        est_weight = st.number_input("น้ำหนักโดยประมาณ (kg)", min_value=0, step=100, value=0)
-    with col_btn:
-        if st.button("➕ เพิ่ม"):
-            st.session_state.load_items.append({"product": product, "weight": est_weight})
-            st.rerun()
-
-    if st.session_state.load_items:
-        st.table(st.session_state.load_items)
-        if st.button("🗑️ ล้างรายการสินค้า"):
-            st.session_state.load_items = []
-            st.rerun()
-
-    if st.button("✅ บันทึก Load Order"):
-        st.success(f"บันทึกการจองคิวรถ {selected_truck['plate']} เรียบร้อย!")
-        st.balloons()
-        st.session_state.load_items = []
-        st.rerun()
-else:
-    st.info("กรุณาเลือกหรือค้นหารถก่อน")
+        submitted = st.form_submit_button("✅ บันทึกใบสั่งโหลด (เปิดจองคิวรถ)")
+        if submitted:
+            try:
+                load_order_data = {
+                    "order_date": str(date.today()),
+                    "truck_id": selected_truck["id"],
+                    "product_type_id": prod_options[selected_prod_name],
+                    "freight_mode": freight_mode,
+                    "freight_rate": freight_rate,
+                    "base_weight_option": base_weight_option if freight_mode == "PER_TON" else None,
+                    "status": "PENDING",
+                    "created_by": st.session_state.user_id
+                }
+                
+                supabase.table("load_orders").insert(load_order_data).execute()
+                st.success(f"🎉 ออกใบสั่งโหลดจองคิวให้รถทะเบียน {selected_truck['plate']} สำเร็จ! รถคันนี้จะไปปรากฏที่หน้าเมนู 'ชั่งออก' ทันทีครับ")
+            except Exception as e:
+                st.error(f"ไม่สามารถบันทึกข้อมูลใบสั่งโหลดได้: {e}")

@@ -1,5 +1,63 @@
 import streamlit as st
-st.header("📦 สต็อกคงเหลือ (Physical / Reporting)")
+import pandas as pd
+from supabase import create_client, Client
+
+st.header("📦 ยอดสินค้าสต็อกคงเหลือจริง ณ ลานเหล็กไทย (คำนวณแบบ Real-time)")
+st.info("📊 ข้อมูลด้านล่างนี้คำนวณโดยตรงจากประวัติการซื้อ ซื้อเข้าสิ้นวัน ชั่งออก และการปรับยอดสต็อกมือในฐานข้อมูล")
+
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
+
+try:
+    # ดึงข้อมูลประวัติการทำรายการสต็อกทั้งหมด
+    tx_res = supabase.table("inventory_transactions").select("stock_type, quantity").execute()
+    transactions = tx_res.data
+    
+    # ดึงจำนวนสต็อกแยกรายประเภทสินค้ามาสรุปผลตาราง
+    stock_detail_res = supabase.table("inventory_transactions")\
+        .select("stock_type, quantity, reference_type, product_types(name)")\
+        .execute()
+        
+except Exception as e:
+    st.error(f"ไม่สามารถคำนวณยอดสต็อกคงเหลือได้เนื่องจาก: {e}")
+    transactions = []
+
+# ---- 1. คำนวณหาตัวเลขรวมหน้าบอร์ดสถิติ ----
+total_physical = sum(t["quantity"] for t in transactions if t["stock_type"] == "PHYSICAL")
+total_reporting = sum(t["quantity"] for t in transactions if t["stock_type"] == "REPORTING")
+
 col1, col2 = st.columns(2)
-col1.metric("Physical", "1,250,000 kg")
-col2.metric("Reporting", "980,000 kg")
+with col1:
+    st.markdown("<div style='background-color:#ffe6e6; padding:20px; border-radius:10px; border-left:8px solid #cc0000;'>", unsafe_allow_html=True)
+    st.metric("🔴 ยอดสต็อกสินค้าจริงหน้าลาน (Physical Stock)", f"{total_physical:,} กิโลกรัม")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with col2:
+    st.markdown("<div style='background-color:#e6f0ff; padding:20px; border-radius:10px; border-left:8px solid #0044cc;'>", unsafe_allow_html=True)
+    st.metric("🔵 ยอดสต็อกทางบัญชี/ภาษี (Reporting Stock)", f"{total_reporting:,} กิโลกรัม")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ---- 2. แสดงตารางประวัติธุรกรรมเพื่อความโปร่งใส ตรวจสอบย้อนกลับได้ ----
+st.subheader("📜 รายงานประวัติความเคลื่อนไหวสต็อก 50 รายการล่าสุด")
+try:
+    log_query = supabase.table("inventory_transactions")\
+        .select("id, stock_type, transaction_type, quantity, transaction_date, reference_type")\
+        .order("id", desc=True).limit(50).execute()
+        
+    if not log_query.data:
+        st.info("ยังไม่มีประวัติการซื้อหรือขายในตารางธุรกรรมสต็อก")
+    else:
+        log_df = pd.DataFrame([{
+            "เลขธุรกรรม": l["id"],
+            "ระบบสต็อก": "🔴 Physical" if l["stock_type"] == "PHYSICAL" else "🔵 Reporting",
+            "ประเภทงาน": l["transaction_type"],
+            "จำนวนน้ำหนัก (kg)": f"{l['quantity']:,}",
+            "วันที่ทำรายการ": l["transaction_date"],
+            "เอกสารอ้างอิง": l["reference_type"]
+        } for l in log_query.data])
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
+except Exception as e:
+    st.write("ไม่สามารถแสดงตารางล็อกประวัติได้")

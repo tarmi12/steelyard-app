@@ -61,7 +61,6 @@ else:
         
         default_tare = current_job["truck_empty_weight"]
         
-        # ปรับกลับมาใช้รูปแบบการกรอกนอกฟอร์มเพื่อแก้ไขอาการสูตรน้ำหนักค้าง (Live-Calculation)
         col_w1, col_w2 = st.columns(2)
         with col_w1:
             gross_input = st.number_input("1. น้ำหนักรวมรถหนัก (Gross Weight - kg) *", min_value=0, step=10, value=int(default_tare + 15000))
@@ -80,39 +79,37 @@ else:
         remark = st.text_area("หมายเหตุประกอบการชั่งน้ำหนักขาออก")
         st.markdown("---")
         
-        # ---- 3. จัดการปุ่มบันทึกแบบ Single-Step ป้องกันข้อมูลรีเซ็ตหาย ----
+        # ---- 3. จัดการปุ่มบันทึกแบบ Single-Step ----
         btn_label = "⌛ กำลังบันทึกและตัดสต็อก..." if st.session_state.is_weigh_out_processing else "⚖️ ยืนยันบันทึกน้ำหนักและตัดสต็อกคลังจริงทันที"
         
         if st.button(btn_label, use_container_width=True, disabled=st.session_state.is_weigh_out_processing):
             if net_weight_calc <= 0:
                 st.error("❌ ค่าน้ำหนักสินค้าไม่ถูกต้อง น้ำหนักรถหนักต้องมากกว่าน้ำหนักรถเปล่าครับ")
             else:
-                # เปิดสถานะล็อกปุ่มทันทีเพื่อกันกดย้ำ
                 st.session_state.is_weigh_out_processing = True
                 
                 try:
                     target_lo_id = current_job["load_order_id"]
                     target_factory_id = factory_options[selected_factory_name]
                     
-                    # 1. ยิงคำสั่งบันทึกเข้าตาราง weigh_out เพื่อไปปลุกตระกูล Trigger หลังบ้านให้ลดสต็อกคลัง PHYSICAL
+                    # 1. บันทึกข้อมูลเข้าตาราง weigh_out (แก้ไขคีย์เป็น "date" เรียบร้อยแล้ว)
                     supabase.table("weigh_out").insert({
                         "load_order_id": target_lo_id,
                         "gross_weight": gross_input,
                         "tare_weight": tare_input,
                         "net_weight": net_weight_calc,
                         "destination_factory_id": target_factory_id,
-                        "weigh_out_date": str(date.today()),
+                        "date": str(date.today()), # บันทึกเข้าคอลัมน์ดั้งเดิมของตารางจริง
                         "remark": remark if remark.strip() else None,
                         "created_by": st.session_state.user_id
                     }).execute()
                     
-                    # 2. ปรับสถานะใบสั่งคิวหลักจาก PENDING ให้เป็น IN_TRANSIT (อยู่ระหว่างเดินทาง)
+                    # 2. ปรับสถานะใบสั่งคิวหลักเป็น IN_TRANSIT
                     supabase.table("load_orders").update({"status": "IN_TRANSIT"}).eq("id", target_lo_id).execute()
                     
                     st.success(f"🎉 สำเร็จ! บันทึกน้ำหนักบิล {target_lo_id} แล้ว ตัดสต็อกจริงเรียบร้อย ยอดรถวิ่งงานเด้งเข้าแผงมอนิเตอร์แล้วครับ")
                     st.balloons()
                     
-                    # ล้างสถานะเพื่อเตรียมพร้อมสำหรับคิวคันถัดไป
                     st.session_state.is_weigh_out_processing = False
                     st.rerun()
                     

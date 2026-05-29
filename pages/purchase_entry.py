@@ -43,7 +43,7 @@ with st.form("real_purchase_entry_form"):
             r_p = st.number_input("🔵 ราคา/ตัน Rep", min_value=0.0, step=10.0, key=f"real_rp_{i}")
             
         form_data.append({
-            "product_id": product_options.get(p_name),
+            "product_type_id": product_options.get(p_name),
             "physical_weight": p_w,
             "physical_price_per_ton": p_p,
             "reporting_weight": r_w,

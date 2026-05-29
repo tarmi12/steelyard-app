@@ -1,113 +1,135 @@
 import streamlit as st
 from datetime import date
-import qrcode
-from io import BytesIO
 from supabase import create_client, Client
 
-st.header("⚖️ ชั่งออก (ตัดสต็อกหน้าลานลานเหล็กทันที)")
+st.header("⚖️ ระบบบันทึกน้ำหนักชั่งออก (ตัดสต็อกคลังสินค้ากองจริง)")
+st.info("🔴 ข้อมูลน้ำหนักสุทธิหน้าลานจะถูกนำไปหักออกจากสต็อกคลังกองจริง (Physical Stock) ทันทีหลังกดบันทึก")
 
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
-# ดึงคิวรถที่อยู่ระหว่างรอชั่งออกจริง (Status = PENDING)
-try:
-    load_res = supabase.table("load_orders").select("id, order_date, trucks(plate, driver_name), product_types(name)").eq("status", "PENDING").execute()
-    orders_map = {f"คิวที่ {o['id']} - ทะเบียน {o['trucks']['plate']} ({o['product_types']['name']})": o for o in load_res.data}
-except Exception as e:
-    st.error(f"ไม่สามารถดึงข้อมูลคิวรถได้: {e}")
-    orders_map = {}
+# ตัวแปรควบคุมการส่งข้อมูลซ้ำ (Anti-Duplicate Switch)
+if "weigh_out_is_saving" not in st.session_state:
+    st.session_state.weigh_out_is_saving = False
 
-# ดึงรายชื่อโรงงานปลายทางจริง
+# ---- 1. ดึงข้อมูลคิวรถที่ค้างชั่งออก (แก้จุดค้างถาวร) ----
 try:
+    # 1.1 ดึงคิวรถที่สถานะยังเป็น PENDING ทั้งหมดจากฐานข้อมูล
+    lo_res = supabase.table("load_orders").select("id, truck_id, product_type_id, order_date").eq("status", "PENDING").execute()
+    pending_orders = lo_res.data
+    
+    # 1.2 ดึงข้อมูล Master รถยนต์ทั้งหมดเพื่อเอามาจับคู่ชื่อ
+    truck_res = supabase.table("trucks").select("id, plate, driver_name, empty_weight").execute()
+    truck_map = {t["id"]: t for t in truck_res.data}
+    
+    # 1.3 ดึงข้อมูล Master ประเภทเหล็กทั้งหมดมาจับคู่ชื่อ
+    prod_res = supabase.table("product_types").select("id, name").execute()
+    prod_map = {p["id"]: p["name"] for p in prod_res.data}
+    
+    # 1.4 ดึงข้อมูลโรงงานปลายทางทั้งหมดมาทำตัวเลือกให้เสมียนจิ้มเลือก
     factory_res = supabase.table("factories").select("id, name").execute()
-    factories_map = {f["name"]: f["id"] for f in factory_res.data}
-except Exception:
-    factories_map = {}
-
-selected_label = st.selectbox("เลือกรายการสั่งโหลดรถที่จองคิวไว้", list(orders_map.keys()))
-
-if selected_label:
-    current_order = orders_map[selected_label]
-    st.success(f"🚚 รถ: {current_order['trucks']['plate']} | คนขับ: {current_order['trucks']['driver_name']} | สินค้า: {current_order['product_types']['name']}")
+    factory_options = {f["name"]: f["id"] for f in factory_res.data}
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        gross = st.number_input("น้ำหนักรวมรถหนัก (Gross) kg", min_value=0, value=0, step=10)
-    with col2:
-        tare = st.number_input("น้ำหนักรถเปล่า (Tare) kg", min_value=0, value=0, step=10)
-    with col3:
-        net = gross - tare if gross >= tare else 0
-        st.metric("น้ำหนักสินค้าสุทธิ (Net Weight)", f"{net:,} kg")
+    # นำข้อมูล Master ทั้งหมดมาจัดรูปทำเป็นกล่องตัวเลือกคิวรถค้างชั่งบนหน้าจอ
+    available_queues = {}
+    for lo in pending_orders:
+        truck_data = truck_map.get(lo["truck_id"], {})
+        plate = truck_data.get("plate", "ไม่ระบุทะเบียน")
+        driver = truck_data.get("driver_name", "ไม่ระบุคนขับ")
+        prod_name = prod_map.get(lo["product_type_id"], "ไม่ระบุประเภทเหล็ก")
         
-    dest_name = st.selectbox("เลือกโรงงานปลายทาง", list(factories_map.keys()))
-    vat_mode = st.radio("ประเภทภาษี", ["NORMAL", "NO_VAT"])
-    arrival_date = st.date_input("วันที่กำหนดถึงปลายทาง", date.today())
-    remark = st.text_area("หมายเหตุการชั่งออก")
-    
-    if st.button("💾 บันทึกการชั่งออกและส่งข้อมูลพิมพ์", use_container_width=True):
-        if net <= 0:
-            st.error("น้ำหนักสินค้าไม่ถูกต้อง กรุณาตรวจสอบค่าน้ำหนักหนักและน้ำหนักเบาอีกครั้ง")
-        else:
-            try:
-                insert_data = {
-                    "load_order_id": current_order["id"],
-                    "gross_weight": gross,
-                    "tare_weight": tare,
-                    "net_weight": net,
-                    "vat_mode": vat_mode,
-                    "destination_factory_id": factories_map[dest_name],
-                    "arrival_date": str(arrival_date),
-                    "remark": remark,
-                    "created_by": st.session_state.user_id
-                }
-                
-                res = supabase.table("weigh_out").insert(insert_data).execute()
-                st.success("✅ บันทึกข้อมูลและทำรายการตัดสต็อก Physical เรียบร้อยแล้ว!")
-                
-                st.session_state.print_wo_id = res.data[0]["id"]
-                st.session_state.print_data = {
-                    "plate": current_order['trucks']['plate'],
-                    "product": current_order['product_types']['name'],
-                    "net": net,
-                    "dest": dest_name
-                }
-                st.rerun()
-            except Exception as error:
-                st.error(f"เกิดข้อผิดพลาด: {error}")
+        label = f"คิวจอง LO-{lo['id']} | รถทะเบียน: {plate} ({driver}) - เหล็ก: {prod_name}"
+        available_queues[label] = {
+            "load_order_id": lo["id"],
+            "truck_id": lo["truck_id"],
+            "product_type_id": lo["product_type_id"],
+            "truck_empty_weight": truck_data.get("empty_weight", 0)
+        }
 
-# ---- ระบบจัดการเครื่องพิมพ์ผ่านหน้าต่างเบราว์เซอร์ (Window Print) ----
-if "print_wo_id" in st.session_state:
-    st.markdown("---")
-    st.subheader("🖨️ ใบส่งสินค้า/ใบชั่งออก (สลิปขนาด 80mm)")
+except Exception as e:
+    st.error(f"ไม่สามารถเชื่อมต่อข้อมูลคิวตราชั่งได้: {e}")
+    available_queues = {}
+    factory_options = {}
+
+# ---- 2. แสดงผลฟอร์มตราชั่งหน้าลาน ----
+if not available_queues:
+    st.success("✨ ไม่มีรถยนต์ตกค้างในคิวชั่งออก (รถทุกคันผ่านเครื่องชั่งและวิ่งออกจากลานหมดแล้วครับ)")
+else:
+    selected_label = st.selectbox("เลือกคิวรถสิบล้อที่เหยียบอยู่บนเครื่องตราชั่งออก", list(available_queues.keys()))
     
-    p_data = st.session_state.print_data
-    line_url = st.session_state.get("line_channel_token", "https://line.me")
-    
-    qr = qrcode.QRCode(version=1, box_size=4, border=1)
-    qr.add_data(f"WO_ID:{st.session_state.print_wo_id}")
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    
-    # แสดงสลีปจัดหน้าขนาดกะทัดรัดสำหรับเครื่องพิมพ์ความร้อน
-    st.image(buf, width=150, caption="สแกนส่งหลักฐานปลายทาง")
-    st.text(f"เลขที่เอกสารบิล: WO-{st.session_state.print_wo_id}")
-    st.text(f"ทะเบียนรถ: {p_data['plate']}")
-    st.text(f"ประเภทสินค้า: {p_data['product']}")
-    st.text(f"น้ำหนักสุทธิ: {p_data['net']:,} kg")
-    st.text(f"โรงงานปลายทาง: {p_data['dest']}")
-    
-    # ฝังคำสั่งควบคุมเบราว์เซอร์ให้เปิดหน้าต่างสั่งพิมพ์ทันที
-    st.components.v1.html("""
-        <script>
-            window.parent.focus();
-            window.print();
-        </script>
-    """, height=0, width=0)
-    
-    if st.button("❌ เสร็จสิ้นและปิดหน้าต่างพิมพ์"):
-        del st.session_state.print_wo_id
-        del st.session_state.print_data
+    if selected_label:
+        current_job = available_queues[selected_label]
+        
+        st.markdown("---")
+        st.subheader("📝 กรอกข้อมูลพิกัดน้ำหนักจากตราชั่งจริง")
+        
+        # ดึงค่าน้ำหนักรถเปล่าเริ่มต้นมาคำนวณเปรียบเทียบ
+        default_tare = current_job["truck_empty_weight"]
+        
+        # ปรับระบบเป็นคำนวณสดนอกฟอร์ม (Live-Calculation) เพื่อไม่ให้สูตรคำนวณค้างแบบหน้าเคลียร์บิล
+        col_w1, col_w2 = st.columns(2)
+        with col_w1:
+            gross_input = st.number_input("1. น้ำหนักรวมรถหนัก (Gross Weight - kg) *", min_value=0, step=10, value=int(default_tare + 15000))
+        with col_w2:
+            tare_input = st.number_input("2. น้ำหนักรถเปล่าหน้างาน (Tare Weight - kg) *", min_value=0, step=10, value=int(default_tare))
+            
+        # สูตรคำนวณหาน้ำหนักเนื้อเหล็กสุทธิสดๆ ทันที
+        net_weight_calc = max(gross_input - tare_input, 0)
+        
+        st.markdown("---")
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            st.metric("📦 น้ำหนักสินค้าสุทธิที่จะหักสต็อก (Net Weight)", f"{net_weight_calc:,} kg")
+        with col_m2:
+            # เลือกโรงงานปลายทางที่จะไปส่ง
+            selected_factory_name = st.selectbox("เลือกโรงงานปลายทางผู้รับซื้อสินค้าเที่ยวนี้ *", list(factory_options.keys()))
+            
+        remark = st.text_area("หมายเหตุประกอบการชั่งน้ำหนักขาออก")
+        
+        st.markdown("---")
+        
+        # ครอบฟอร์มเฉพาะปุ่มบันทึก เพื่อทำหน้าที่สั่ง INSERT ลงระบบอย่างปลอดภัยกันกดย้ำ
+        with st.form("secure_weigh_out_submit"):
+            submit_disabled = st.session_state.weigh_out_is_saving
+            btn_label = "⌛ กำลังตัดสต็อกหน้าลานเรียบลอย..." if st.session_state.weigh_out_is_saving else "⚖️ ยืนยันบันทึกน้ำหนักและตัดสต็อกคลังจริงทันที"
+            
+            submitted = st.form_submit_button(btn_label, disabled=submit_disabled)
+            if submitted:
+                if net_weight_calc <= 0:
+                    st.error("❌ ค่าน้ำหนักสินค้าไม่ถูกต้อง น้ำหนักรถหนักต้องมากกว่าน้ำหนักรถเปล่าครับ")
+                else:
+                    st.session_state.weigh_out_is_saving = True
+                    st.rerun()
+
+# ---- 3. ส่วนประมวลผลคำสั่งฝั่งฐานข้อมูลจริง (หลังผ่านระบบล็อกปุ่ม) ----
+if st.session_state.weigh_out_is_saving:
+    try:
+        target_lo_id = current_job["load_order_id"]
+        target_factory_id = factory_options[selected_factory_name]
+        
+        # 3.1 บันทึกข้อมูลตราชั่งลงตาราง weigh_out เพื่อเปิดใบสลิปออกลาน
+        # (ขั้นตอนนี้จะไปปลุกตัว Trigger หลังบ้านให้ทำการหักลบยอดสต็อกฝั่ง PHYSICAL ทันที)
+        supabase.table("weigh_out").insert({
+            "load_order_id": target_lo_id,
+            "gross_weight": gross_input,
+            "tare_weight": tare_input,
+            "net_weight": net_weight_calc,
+            "destination_factory_id": target_factory_id,
+            "weigh_out_date": str(date.today()),
+            "remark": remark if remark.strip() else None,
+            "created_by": st.session_state.user_id
+        }).execute()
+        
+        # 3.2 ทำการอัปเดตสถานะคิวงานหลักใน load_orders จาก PENDING ให้เปลี่ยนเป็น IN_TRANSIT (อยู่ระหว่างเดินทาง)
+        supabase.table("load_orders").update({"status": "IN_TRANSIT"}).eq("id", target_lo_id).execute()
+        
+        st.success(f"🎉 บันทึกชั่งออกคิว LO-{target_lo_id} สำเร็จ! ตัดสต็อกหน้าลานจริงเรียบร้อย และส่งรายชื่อรถคันนี้เข้าสู่ 'กระดานติดตามรถระหว่างเดินทาง' ทันทีครับ")
+        st.balloons()
+        
+    except Exception as error:
+        st.error(f"เกิดข้อผิดพลาดในการบันทึกข้อมูลชั่งออก: {error}")
+    finally:
+        # ปลดล็อกปุ่มให้พนักงานชั่งรถคันถัดไปได้ปกติ
+        st.session_state.weigh_out_is_saving = False
         st.rerun()

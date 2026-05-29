@@ -59,14 +59,14 @@ else:
         st.markdown("---")
         st.subheader("📝 กรอกข้อมูลพิกัดน้ำหนักจากตราชั่งจริง")
         
-        default_tare = current_job["truck_empty_weight"]
-        
+        # 🛠️ [แก้ไขใหม่] ปรับค่าน้ำหนักจำลองเริ่มต้นให้กลายเป็น 0 ทั้งหมด เพื่อให้พนักงานพิมพ์ตัวเลขตามตราชั่งจริงเท่านั้น
         col_w1, col_w2 = st.columns(2)
         with col_w1:
-            gross_input = st.number_input("1. น้ำหนักรวมรถหนัก (Gross Weight - kg) *", min_value=0, step=10, value=int(default_tare + 15000))
+            gross_input = st.number_input("1. น้ำหนักรวมรถหนัก (Gross Weight - kg) *", min_value=0, step=10, value=0)
         with col_w2:
-            tare_input = st.number_input("2. น้ำหนักรถเปล่าหน้างาน (Tare Weight - kg) *", min_value=0, step=10, value=int(default_tare))
+            tare_input = st.number_input("2. น้ำหนักรถเปล่าหน้างาน (Tare Weight - kg) *", min_value=0, step=10, value=0)
             
+        # สูตรประมวลผลคำนวณหาน้ำหนักเนื้อเหล็กสุทธิสด ๆ แบบเรียลไทม์
         net_weight_calc = max(gross_input - tare_input, 0)
         
         st.markdown("---")
@@ -83,8 +83,10 @@ else:
         btn_label = "⌛ กำลังบันทึกและตัดสต็อก..." if st.session_state.is_weigh_out_processing else "⚖️ ยืนยันบันทึกน้ำหนักและตัดสต็อกคลังจริงทันที"
         
         if st.button(btn_label, use_container_width=True, disabled=st.session_state.is_weigh_out_processing):
-            if net_weight_calc <= 0:
-                st.error("❌ ค่าน้ำหนักสินค้าไม่ถูกต้อง น้ำหนักรถหนักต้องมากกว่าน้ำหนักรถเปล่าครับ")
+            if gross_input <= 0 or tare_input <= 0:
+                st.error("❌ กรุณากรอกค่าน้ำหนักรถหนักและรถเบาให้ครบถ้วนก่อนกดบันทึก")
+            elif net_weight_calc <= 0:
+                st.error("❌ ค่าน้ำหนักสินค้าไม่ถูกต้อง น้ำหนักรวมรถหนักต้องมีมากกว่าน้ำหนักรถเปล่าครับ")
             else:
                 st.session_state.is_weigh_out_processing = True
                 
@@ -92,22 +94,22 @@ else:
                     target_lo_id = current_job["load_order_id"]
                     target_factory_id = factory_options[selected_factory_name]
                     
-                    # 1. บันทึกข้อมูลเข้าตาราง weigh_out (แก้ไขคีย์เป็น "date" เรียบร้อยแล้ว)
+                    # 🛠️ [แก้ไขใหม่] ถอดคีย์ vat_mode ออกไปจากฝั่งคำสั่ง insert เพื่อไม่ให้ผูกมัด และยิงเข้าคอลัมน์ดั้งเดิมอย่างอิสระ
                     supabase.table("weigh_out").insert({
                         "load_order_id": target_lo_id,
                         "gross_weight": gross_input,
                         "tare_weight": tare_input,
                         "net_weight": net_weight_calc,
                         "destination_factory_id": target_factory_id,
-                        "date": str(date.today()), # บันทึกเข้าคอลัมน์ดั้งเดิมของตารางจริง
+                        "date": str(date.today()),
                         "remark": remark if remark.strip() else None,
                         "created_by": st.session_state.user_id
                     }).execute()
                     
-                    # 2. ปรับสถานะใบสั่งคิวหลักเป็น IN_TRANSIT
+                    # ปรับสถานะใบสั่งคิวหลักเป็น IN_TRANSIT
                     supabase.table("load_orders").update({"status": "IN_TRANSIT"}).eq("id", target_lo_id).execute()
                     
-                    st.success(f"🎉 สำเร็จ! บันทึกน้ำหนักบิล {target_lo_id} แล้ว ตัดสต็อกจริงเรียบร้อย ยอดรถวิ่งงานเด้งเข้าแผงมอนิเตอร์แล้วครับ")
+                    st.success(f"🎉 สำเร็จ! บันทึกน้ำหนักบิล {target_lo_id} แล้ว ตัดสต็อกคลังจริงเรียบร้อย ยอดรถเด้งเข้าแผงมอนิเตอร์แล้วครับ")
                     st.balloons()
                     
                     st.session_state.is_weigh_out_processing = False

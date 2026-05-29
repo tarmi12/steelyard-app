@@ -64,8 +64,8 @@ for job in all_jobs:
             "คนขับ": truck.get("driver_name", "-"),
             "สินค้าบนรถ": product.get("name", "-"),
             "โรงงานปลายทาง": loading_factory.get("name", "-"),
-            "ต้นทาง: หนัก (Gross)": f"{wo['gross_weight']:,} kg",
-            "ต้นทาง: เบา (Tare)": f"{wo['tare_weight']:,} kg",
+            "ต้นทาง: รถหนัก (Gross)": f"{wo['gross_weight']:,} kg",   # เพิ่มตรงตามสั่งการ
+            "ต้นทาง: รถเบา (Tare)": f"{wo['tare_weight']:,} kg",     # เพิ่มตรงตามสั่งการ
             "ต้นทาง: สุทธิ (Net)": f"{wo['net_weight']:,} kg",
             "วันที่ชั่งออก": job["order_date"]
         })
@@ -76,7 +76,7 @@ for job in all_jobs:
             dest = wo["destination_weigh_in"][0]
             loading_factory = wo.get("factories", {}) or {}
             
-            # คำนวณหาน้ำหนักรวมปลายทางจากตารางรับจริง (ถ้ามีเก็บ Gross/Tare ปลายทาง หรือคำนวณส่วนต่าง)
+            # คำนวณหาน้ำหนักรวมปลายทางจากตารางรับจริง
             transit_loss = max(wo["net_weight"] - dest["received_weight"], 0) if dest["received_weight"] else 0
             
             unpaid_freight_list.append({
@@ -84,8 +84,8 @@ for job in all_jobs:
                 "ทะเบียนรถ": truck.get("plate", "-"),
                 "คนขับ": truck.get("driver_name", "-"),
                 "โรงงานที่ไปลง": loading_factory.get("name", "-"),
-                "ต้นทาง: หนัก (Gross)": f"{wo['gross_weight']:,} kg",
-                "ต้นทาง: เบา (Tare)": f"{wo['tare_weight']:,} kg",
+                "ต้นทาง: รถหนัก (Gross)": f"{wo['gross_weight']:,} kg",   # เพิ่มตรงตามสั่งการ
+                "ต้นทาง: รถเบา (Tare)": f"{wo['tare_weight']:,} kg",     # เพิ่มตรงตามสั่งการ
                 "ต้นทาง: สุทธิ (Net)": f"{wo['net_weight']:,} kg",
                 "ปลายทาง: รับจริง (Net)": f"{dest['received_weight']:,} kg" if dest['received_weight'] else "-",
                 "น้ำหนักขาดระหว่างทาง": f"{transit_loss:,} kg",
@@ -109,10 +109,11 @@ with tab1:
         st.dataframe(pd.DataFrame(loading_list), use_container_width=True, hide_index=True)
 
 with tab2:
-    st.subheader("🚛 รายการรถเหล็กวิ่งออกจากลานแล้ว อยู่ระหว่างเดินทาง (แสดงตราชั่งต้นทาง)")
+    st.subheader("🚛 รายการรถเหล็กวิ่งออกจากลานแล้ว อยู่ระหว่างเดินทาง (แสดงน้ำหนักต้นทางครบถ้วน)")
     if not in_transit_list:
         st.success("ไม่มีรถยนต์อยู่ระหว่างการเดินทาง (โรงงานปลายทางทำการเคลียร์บิลครบหมดแล้ว)")
     else:
+        # แสดงตารางพร้อมคอลัมน์ หนัก-เบา-สุทธิ ต้นทางจริง
         st.dataframe(pd.DataFrame(in_transit_list), use_container_width=True, hide_index=True)
 
 with tab3:
@@ -120,5 +121,5 @@ with tab3:
     if not unpaid_freight_list:
         st.success("อนุมัติจ่ายเงินค่าน้ำมันและค่าขนส่งครบถ้วนแล้ว ไม่มีรายการค้างจ่าย")
     else:
-        # ปรับการแสดงผลคอลัมน์ให้กว้างสะใจเพื่อให้เห็นตัวเลขน้ำหนักเทียบกันชัดๆ
+        # แสดงตารางเปรียบเทียบตราชั่งพร้อมคอลัมน์ หนัก-เบา-สุทธิ ต้นทางจริง
         st.dataframe(pd.DataFrame(unpaid_freight_list), use_container_width=True, hide_index=True)

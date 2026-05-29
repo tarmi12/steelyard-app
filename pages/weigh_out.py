@@ -59,7 +59,6 @@ else:
         st.markdown("---")
         st.subheader("📝 กรอกข้อมูลพิกัดน้ำหนักจากตราชั่งจริง")
         
-        # ค่าน้ำหนักเริ่มต้นเป็น 0 เคลียร์ ๆ ตามหน้าตราชั่งจริง
         col_w1, col_w2 = st.columns(2)
         with col_w1:
             gross_input = st.number_input("1. น้ำหนักรวมรถหนัก (Gross Weight - kg) *", min_value=0, step=10, value=0)
@@ -75,7 +74,6 @@ else:
         with col_m2:
             selected_factory_name = st.selectbox("เลือกโรงงานปลายทางผู้รับซื้อสินค้าเที่ยวนี้ *", list(factory_options.keys()))
             
-        # ⭐️ [เพิ่มใหม่ตามสั่งการ] กล่องเลือกประเภท VAT เพื่อส่งค่าเข้าฐานข้อมูลโดยตรง ไม่ต้องเดาสุ่ม
         st.markdown("---")
         st.subheader("📊 เงื่อนไขภาษีสำหรับตั๋วชั่งใบนี้")
         user_vat_mode = st.radio(
@@ -102,23 +100,23 @@ else:
                     target_lo_id = current_job["load_order_id"]
                     target_factory_id = factory_options[selected_factory_name]
                     
-                    # บันทึกข้อมูลเข้าตาราง weigh_out โดยนำค่า user_vat_mode ที่เสมียนติ๊กเลือกส่งไปบันทึกจริง
+                    # 1. บันทึกข้อมูลน้ำหนักลงตาราง weigh_out
                     supabase.table("weigh_out").insert({
                         "load_order_id": target_lo_id,
                         "gross_weight": gross_input,
                         "tare_weight": tare_input,
                         "net_weight": net_weight_calc,
                         "destination_factory_id": target_factory_id,
-                        "vat_mode": user_vat_mode, # บันทึกตามที่พนักงานติ๊กเลือกจริงหน้างานผ่านฉลุย
+                        "vat_mode": user_vat_mode,
                         "date": str(date.today()),
                         "remark": remark if remark.strip() else None,
                         "created_by": st.session_state.user_id
                     }).execute()
                     
-                    # ปรับสถานะใบสั่งคิวหลักเป็น IN_TRANSIT
-                    supabase.table("load_orders").update({"status": "IN_TRANSIT"}).eq("id", target_lo_id).execute()
+                    # 2. 🛠️ [แก้ไขจุดพัง] ปรับสถานะเป็น 'COMPLETED' เพื่อให้ถูกกฎเกณฑ์ Check Constraint ของฐานข้อมูลคุณ
+                    supabase.table("load_orders").update({"status": "COMPLETED"}).eq("id", target_lo_id).execute()
                     
-                    st.success(f"🎉 สำเร็จ! บันทึกน้ำหนักบิล {target_lo_id} เรียบร้อย (ระบบ: {user_vat_mode}) ยอดรถเด้งเข้าแผงมอนิเตอร์ทันทีครับ")
+                    st.success(f"🎉 สำเร็จ! บันทึกน้ำหนักบิล {target_lo_id} เรียบร้อย สต็อกคลังจริงตัดยอดทันที และข้อมูลถูกส่งไปรอที่ระบบติดตามสถานะแล้วครับ")
                     st.balloons()
                     
                     st.session_state.is_weigh_out_processing = False

@@ -66,14 +66,15 @@ if not st.session_state.user_id:
 role = st.session_state.role
 pages = []
 
-# ⭐ เคสที่ 1: ถ้าเป็น "admin" (เจ้าของลาน) ให้แอดหน้าจอทั้งหมดในระบบเข้าเมนูทันที เข้าได้ทุกหน้า 100%
+# ⭐ เคสที่ 1: สิทธิ์ของ "admin" (เจ้าของลาน) เข้าได้ทุกหน้าจอ 100%
 if role == "admin":
     pages += [
-        # --- หมวดหมู่งานหน้ารานและการขนส่ง ---
+        # --- หมวดหมู่งานหน้าร้านและการขนส่ง ---
         st.Page("pages/purchase_entry.py", title="บันทึกซื้อเข้าสิ้นวัน", icon="📥"),
         st.Page("pages/purchase_history.py", title="ประวัติการซื้อ", icon="📋"),
         st.Page("pages/load_order.py", title="สั่งโหลด (จองคิว)", icon="🚚"),
         st.Page("pages/weigh_out.py", title="ชั่งออก (Weigh Out)", icon="⚖️"),
+        st.Page("pages/truck_monitor_report.py", title="🎛️ ติดตามสถานะรถวิ่งงานสด", icon="🎯"),  # แทรกตรงนี้เรียบร้อยครับ
         st.Page("pages/destination_scan.py", title="สแกนหลักฐานปลายทาง", icon="📸"),
         st.Page("pages/sales_clearing.py", title="เคลียร์บิลปลายทาง", icon="💰"),
         st.Page("pages/stock_balance.py", title="สต็อกคงเหลือ", icon="📦"),
@@ -102,6 +103,7 @@ elif role == "manager":
         st.Page("pages/purchase_history.py", title="ประวัติการซื้อ", icon="📋"),
         st.Page("pages/load_order.py", title="สั่งโหลด (จองคิว)", icon="🚚"),
         st.Page("pages/weigh_out.py", title="ชั่งออก (Weigh Out)", icon="⚖️"),
+        st.Page("pages/truck_monitor_report.py", title="🎛️ ติดตามสถานะรถวิ่งงานสด", icon="🎯"),  # ผู้จัดการเห็นด้วยเพื่อคุมงาน
         st.Page("pages/destination_scan.py", title="สแกนหลักฐานปลายทาง", icon="📸"),
         st.Page("pages/sales_clearing.py", title="เคลียร์บิลปลายทาง", icon="💰"),
         st.Page("pages/stock_balance.py", title="สต็อกคงเหลือ", icon="📦"),
@@ -122,6 +124,7 @@ elif role == "clerk":
         st.Page("pages/purchase_history.py", title="ประวัติการซื้อ", icon="📋"),
         st.Page("pages/load_order.py", title="สั่งโหลด (จองคิว)", icon="🚚"),
         st.Page("pages/weigh_out.py", title="ชั่งออก (Weigh Out)", icon="⚖️"),
+        st.Page("pages/truck_monitor_report.py", title="🎛️ ติดตามสถานะรถวิ่งงานสด", icon="🎯"),  # เสมียนเห็นด้วยเพื่อเช็คคิวรถหน้าลาน
         st.Page("pages/destination_scan.py", title="สแกนหลักฐานปลายทาง", icon="📸"),
         st.Page("pages/sales_clearing.py", title="เคลียร์บิลปลายทาง", icon="💰"),
         st.Page("pages/stock_balance.py", title="สต็อกคงเหลือ", icon="📦"),

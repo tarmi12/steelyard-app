@@ -1,74 +1,126 @@
 import streamlit as st
+import pandas as pd
 from datetime import date
 from supabase import create_client, Client
 
-st.header("💵 ตรวจสอบและบันทึกเงินโอนจากโรงงาน (ปิดยอดลูกหนี้)")
+st.header("💵 ตรวจสอบและบันทึกเงินโอนจากโรงงาน (ระบบเคลียร์ยอดรวมหลายบิล)")
+st.info("📋 โรงงานโอนเงินรวมยอดมาหลายบิล? คุณสามารถติ๊กเลือกหน้ารายการบิลที่โอนรวมกันมาด้านล่างนี้ ระบบจะคำนวณยอดเงินรวมให้อัตโนมัติ")
 
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
-# ---- 1. ดึงรายการเคลียร์บิลที่ "ยังไม่ได้รับเงิน" หรือค้างจ่าย ----
+# ตัวแปรควบคุมการส่งข้อมูลซ้ำ (Anti-Duplicate Switch)
+if "receipt_is_saving" not in st.session_state:
+    st.session_state.receipt_is_saving = False
+
+# ---- 1. ดึงรายการเคลียร์บิลที่ "ยังไม่ได้รับเงิน" หรือค้างจ่ายทั้งหมด ----
 try:
-    # ดึงรายการ sales_clearing ทั้งหมด
-    clearing_res = supabase.table("sales_clearing").select("id, weigh_out_id, total_amount, vat_amount, clearing_date, weigh_out(load_orders(trucks(plate)), factories(name))").execute()
+    # ดึงรายการ sales_clearing ที่เชื่อมข้อมูลรถยนต์ และโรงงานปลายทาง
+    clearing_res = supabase.table("sales_clearing").select(
+        "id, weigh_out_id, total_amount, vat_amount, clearing_date, "
+        "weigh_out(net_weight, load_orders(trucks(plate), product_types(name)), factories(name))"
+    ).order("id", desc=True).execute()
     
-    # ดึงรายการที่รับเงินไปแล้วในตาราง receipts
+    # ดึงรายการที่เคยบันทึกรับเงินไปแล้วในตาราง receipts เพื่อเอามาคัดออก
     receipts_res = supabase.table("receipts").select("sales_clearing_id").eq("status", "RECEIVED").execute()
     paid_clearing_ids = [r["sales_clearing_id"] for r in receipts_res.data]
     
-    # กรองเฉพาะรายการที่ยังไม่ได้รับเงิน
-    unpaid_bills = {
-        f"บิลเคลียร์ยอด SC-{c['id']} | รถ {c['weigh_out']['load_orders']['trucks']['plate']} ({c['weigh_out']['factories']['name']}) - ยอด {float(c['total_amount'])+float(c['vat_amount']):,.2f} บาท": c
-        for c in clearing_res.data if c["id"] not in paid_clearing_ids
-    }
+    # กรองเฉพาะรายการที่โรงงานยังค้างจ่ายเงินอยู่จริง ๆ
+    unpaid_list = [c for c in clearing_res.data if c["id"] not in paid_clearing_ids]
 except Exception as e:
     st.error(f"ไม่สามารถดึงข้อมูลบิลค้างรับเงินได้: {e}")
-    unpaid_bills = {}
+    unpaid_list = []
+    paid_clearing_ids = []
 
-# ---- 2. แสดงรายการและฟอร์มบันทึกเงินโอน ----
-if not unpaid_bills:
-    st.success("✅ ยอดเยี่ยม! โรงงานปลายทางชำระเงินครบทุกบิลแล้ว ไม่มีค้างยอด")
+# ---- 2. แสดงตารางรายการบิลค้างจ่าย เพื่อให้เลือกติ๊ก (Checkbox) ----
+if not unpaid_list:
+    st.success("🎉 ยอดเยี่ยม! โรงงานปลายทางชำระเงินครบถ้วนทุกบิลแล้ว ไม่มีค้างยอดลูกหนี้")
 else:
-    selected_bill_label = st.selectbox("เลือกบิลเคลียร์ยอดที่โรงงานโอนเงินเข้ามา", list(unpaid_bills.keys()))
-    
-    if selected_bill_label:
-        bill = unpaid_bills[selected_bill_label]
-        net_amount = float(bill["total_amount"])
-        vat_amount = float(bill["vat_amount"])
-        grand_total = net_amount + vat_amount
+    st.subheader(f"📋 รายการบิลค้างชำระทั้งหมด ณ ปัจจุบัน ({len(unpaid_list)} บิล)")
+    st.caption("คำแนะนำ: ติ๊กถูก หน้าช่องบิลที่โรงงานระบุในใบแจ้งยอดโอนเงิน")
+
+    selected_clearing_records = []
+    total_calculated_amount = 0.0
+
+    # สร้างแบบฟอร์มกางตารางสำหรับเลือกบิลแบบยืดหยุ่น
+    for bill in unpaid_list:
+        wo_data = bill.get("weigh_out", {}) or {}
+        load_order = wo_data.get("load_orders", {}) or {}
+        truck_plate = load_order.get("trucks", {}).get("plate", "ไม่ระบุ")
+        factory_name = wo_data.get("factories", {}).get("name", "ไม่ระบุ")
+        prod_name = load_order.get("product_types", {}).get("name", "ไม่ระบุ")
         
-        st.markdown("---")
-        st.subheader("💰 รายละเอียดการรับเงิน")
+        # คำนวณยอดสุทธิรวม VAT ประจำบิลใบนี้
+        bill_grand_total = float(bill["total_amount"]) + float(bill["vat_amount"])
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"**โรงงานปลายทาง:** {bill['weigh_out']['factories']['name']}")
-            st.write(f"**วันที่เคลียร์บิลต้นทาง:** {bill['clearing_date']}")
-            st.write(f"**มูลค่าสินค้าก่อน VAT:** {net_amount:,.2f} บาท")
-            st.write(f"**ภาษีมูลค่าเพิ่ม VAT (7%):** {vat_amount:,.2f} บาท")
-        with col2:
-            st.metric("ยอดรวมสุทธิที่ต้องได้รับ (Grand Total)", f"{grand_total:,.2f} บาท")
+        # ทำข้อความระบุรายละเอียดบิลรายบรรทัด
+        label_text = f" บิล SC-{bill['id']} | โรงงาน: {factory_name} | รถ: {truck_plate} ({prod_name}) | วันที่เคลียร์: {bill['clearing_date']} | ยอดเงิน: {bill_grand_total:,.2f} บาท"
+        
+        # สร้าง Checkbox รายบิลบนหน้าจอ
+        is_selected = st.checkbox(label_text, key=f"select_sc_{bill['id']}")
+        
+        if is_selected:
+            selected_clearing_records.append(bill)
+            total_calculated_amount += bill_grand_total
+
+    st.markdown("---")
+
+    # ---- 3. สรุปยอดเงินและฟอร์มการบันทึกเมื่อมีการเลือกบิล ----
+    if not selected_clearing_records:
+        st.info("💡 กรุณาติ๊กเลือกรายการบิลค้างจ่ายด้านบนอย่างน้อย 1 รายการเพื่อเริ่มทำเรื่องบันทึกรับเงิน")
+    else:
+        st.subheader("💰 สรุปรายละเอียดการรับเงินโอนรวมยอด")
+        st.warning(f"คุณเลือกเคลียร์บิลพร้อมกันทั้งหมด **{len(selected_clearing_records)}** รายการ")
+        
+        # แสดงยอดเงินที่ระบบคำนวณรวมกันจากทุกบิลที่ติ๊ก
+        st.metric(" ยอดเงินรวมที่คำนวณตามบิล (Total Amount)", f"{total_calculated_amount:,.2f} บาท")
+        
+        with st.form("bulk_receipt_form"):
+            st.write("📝 **กรอกข้อมูลอ้างอิงจากสลิปโอนเงินธนาคาร**")
             
-        with st.form("real_receipt_form"):
-            received_amount = st.number_input("จำนวนเงินที่โอนเข้าจริง (บาท)", min_value=0.0, value=grand_total, step=100.0)
-            bank_ref = st.text_input("เลขที่อ้างอิงธนาคาร / รหัสสลิปโอนเงิน")
-            receipt_date = st.date_input("วันที่เงินเข้าบัญชี", date.today())
+            # ช่องกรอกจำนวนเงินโอนเข้าจริง เผื่อกรณีโรงงานโอนขาดหรือโอนเกินจากยอดบิลเล็กน้อย
+            received_amount_input = st.number_input("จำนวนเงินรวมที่โอนเข้าบัญชีจริงตามสลิป (บาท) *", 
+                                                    min_value=0.0, value=total_calculated_amount, step=100.0)
+            bank_ref = st.text_input("เลขที่อ้างอิงธนาคาร / รหัสสลิปโอนเงิน (Bank Ref) *")
+            receipt_date = st.date_input("วันที่เงินโอนเข้าบัญชี", date.today())
+            payment_remark = st.text_area("หมายเหตุการรับเงินรวมยอด (เช่น โอนรวมยอดสัปดาห์ที่ 2)")
+
+            # ระบบควบคุมปุ่มบันทึกซ้ำ
+            submit_disabled = st.session_state.receipt_is_saving
+            btn_label = "⌛ กำลังตัดยอดบัญชีลูกหนี้..." if st.session_state.receipt_is_saving else "✅ ยืนยันเงินเข้าบัญชีและปิดบิลทั้งหมดที่เลือก"
             
-            submitted = st.form_submit_button("✅ ยืนยันเงินเข้าบัญชีและปิดบิลลูกหนี้")
+            submitted = st.form_submit_button(btn_label, disabled=submit_disabled)
             if submitted:
-                try:
-                    receipt_data = {
-                        "sales_clearing_id": bill["id"],
-                        "received_amount": received_amount,
-                        "bank_ref": bank_ref if bank_ref else None,
-                        "receipt_date": str(receipt_date),
-                        "status": "RECEIVED",
-                        "created_by": st.session_state.user_id
-                    }
-                    
-                    supabase.table("receipts").insert(receipt_data).execute()
-                    st.success(f"🎉 บันทึกรับเงินโอนจำนวน {received_amount:,.2f} บาท สำหรับบิล SC-{bill['id']} เรียบร้อย!")
+                if not bank_ref.strip():
+                    st.error("❌ กรุณากรอกเลขที่อ้างอิงธนาคารหรือรหัสสลิปโอนเงินเพื่อความปลอดภัยของบัญชี")
+                else:
+                    st.session_state.receipt_is_saving = True
                     st.rerun()
-                except Exception as e:
-                    st.error(f"ไม่สามารถบันทึกรับเงินโอนได้: {e}")
+
+# ---- 4. ส่วนประมวลผลบันทึกจริงลงฐานข้อมูลแบบรวดเดียวครบทุกบิล ----
+if st.session_state.receipt_is_saving:
+    try:
+        # คำนวณสัดส่วนเฉลี่ยยอดเงินโอนจริงแบ่งเข้าแต่ละบิล (กรณีโรงงานโอนมาตรงยอด ยอดจะหารลงตัวพอดี)
+        # แต่เพื่อตรรกะระบบ เราจะวนลูป INSERT ปิดสถานะตาราง receipts ทีละบิลตามรายการที่เสมียนติ๊กไว้ครับ
+        for bill in selected_clearing_records:
+            bill_grand_total = float(bill["total_amount"]) + float(bill["vat_amount"])
+            
+            # สั่ง INSERT บันทึกแยกรายบิลใน Supabase เพื่อเปลี่ยนสถานะเป็นชำระเงินแล้ว
+            supabase.table("receipts").insert({
+                "sales_clearing_id": bill["id"],
+                "received_amount": bill_grand_total, # บันทึกปิดยอดเต็มจำนวนของบิลนั้นๆ
+                "bank_ref": bank_ref.strip(),
+                "receipt_date": str(receipt_date),
+                "status": "RECEIVED",
+                "created_by": st.session_state.user_id
+            }).execute()
+            
+        st.success(f"🎉 สำเร็จ! ระบบได้ทำการบันทึกรับเงินและปิดยอดหนี้สะสมทั้ง {len(selected_clearing_records)} บิลเข้าสู่ฐานข้อมูลเรียบร้อยแล้ว!")
+        st.balloons()
+        
+    except Exception as error:
+        st.error(f"ไม่สามารถบันทึกข้อมูลการรับเงินรวมยอดได้เนื่องจาก: {error}")
+    finally:
+        st.session_state.receipt_is_saving = False
+        st.rerun()

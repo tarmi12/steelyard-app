@@ -28,7 +28,6 @@ if "settings_loaded" not in st.session_state:
             st.session_state[setting["key"]] = setting["value"]
         st.session_state.settings_loaded = True
     except Exception:
-        # กำหนดค่าเริ่มต้นกรณีฉุกเฉิน
         st.session_state.transit_loss_threshold_percent = "0.5"
         st.session_state.transit_loss_threshold_kg = "50"
         st.session_state.penalty_rate_per_kg = "10.0"
@@ -36,7 +35,7 @@ if "settings_loaded" not in st.session_state:
 # ---- ระบบเข้าสู่ระบบจริงผ่าน Supabase Profiles ----
 def login_interface():
     st.title("🔐 เข้าสู่ระบบ - ลานเหล็กไทย V2.6")
-    st.write("กรุณาเลือกสิทธิ์การใช้งานเพื่อเริ่มต้นระบบจริง (อ้างอิงข้อมูลจากตาราง profiles)")
+    st.write("กรุณาเลือกบัญชีผู้ใช้ของคุณเพื่อเริ่มต้นระบบ (สิทธิ์ระบบจะถูกจัดสรรตามตำแหน่งในตาราง profiles)")
     
     try:
         profiles_res = supabase.table("profiles").select("*").execute()
@@ -63,12 +62,41 @@ if not st.session_state.user_id:
     login_interface()
     st.stop()
 
-# ---- ระบบแสดงเมนูตามระดับสิทธิ์จริง (Dynamic Navigation) ----
+# ---- ระบบแสดงเมนูตามระดับสิทธิ์ (Dynamic Navigation) ----
 role = st.session_state.role
 pages = []
 
-# สิทธิ์พนักงานเสมียน ผู้จัดการ และเจ้าของ สามารถเข้าถึงหน้างานหลักได้ทั้งหมด
-if role in ["clerk", "manager", "admin"]:
+# ⭐ เคสที่ 1: ถ้าเป็น "admin" (เจ้าของลาน) ให้แอดหน้าจอทั้งหมดในระบบเข้าเมนูทันที เข้าได้ทุกหน้า 100%
+if role == "admin":
+    pages += [
+        # --- หมวดหมู่งานหน้ารานและการขนส่ง ---
+        st.Page("pages/purchase_entry.py", title="บันทึกซื้อเข้าสิ้นวัน", icon="📥"),
+        st.Page("pages/purchase_history.py", title="ประวัติการซื้อ", icon="📋"),
+        st.Page("pages/load_order.py", title="สั่งโหลด (จองคิว)", icon="🚚"),
+        st.Page("pages/weigh_out.py", title="ชั่งออก (Weigh Out)", icon="⚖️"),
+        st.Page("pages/destination_scan.py", title="สแกนหลักฐานปลายทาง", icon="📸"),
+        st.Page("pages/sales_clearing.py", title="เคลียร์บิลปลายทาง", icon="💰"),
+        st.Page("pages/stock_balance.py", title="สต็อกคงเหลือ", icon="📦"),
+        st.Page("pages/truck_management.py", title="จัดการรถ/คนขับ", icon="🚘"),
+        
+        # --- หมวดหมู่งานธุรกรรมการเงิน ---
+        st.Page("pages/receipt_entry.py", title="บันทึกเงินโอน", icon="💵"),
+        st.Page("pages/freight_payment.py", title="จ่ายค่าขนส่ง", icon="🚛"),
+        
+        # --- หมวดหมู่งานบริหารและรายงานขั้นสูง ---
+        st.Page("pages/manual_adjustment.py", title="ปรับยอดสต็อกด้วยมือ", icon="🔧"),
+        st.Page("pages/dashboard.py", title="แดชบอร์ดผู้บริหาร", icon="📊"),
+        st.Page("pages/report_sales.py", title="รายงานการขาย/กำไร/ภาษี", icon="📈"),
+        st.Page("pages/report_freight.py", title="รายงานค่าขนส่ง/ค่าปรับ", icon="📉"),
+        st.Page("pages/report_debtors.py", title="รายงานสถานะลูกหนี้-เจ้าหนี้", icon="📑"),
+        
+        # --- หมวดหมู่ควบคุมระบบนโยบาย ---
+        st.Page("pages/settings.py", title="ตั้งค่าระบบ", icon="⚙️"),
+        st.Page("pages/user_management.py", title="จัดการผู้ใช้", icon="👥"),
+    ]
+
+# 💼 เคสที่ 2: สิทธิ์ของผู้จัดการ (manager)
+elif role == "manager":
     pages += [
         st.Page("pages/purchase_entry.py", title="บันทึกซื้อเข้าสิ้นวัน", icon="📥"),
         st.Page("pages/purchase_history.py", title="ประวัติการซื้อ", icon="📋"),
@@ -78,30 +106,28 @@ if role in ["clerk", "manager", "admin"]:
         st.Page("pages/sales_clearing.py", title="เคลียร์บิลปลายทาง", icon="💰"),
         st.Page("pages/stock_balance.py", title="สต็อกคงเหลือ", icon="📦"),
         st.Page("pages/truck_management.py", title="จัดการรถ/คนขับ", icon="🚘"),
-    ]
-
-# สิทธิ์เสมียนและผู้จัดการ สำหรับงานบันทึกธุรกรรมการเงิน
-if role in ["clerk", "manager"]:
-    pages += [
         st.Page("pages/receipt_entry.py", title="บันทึกเงินโอน", icon="💵"),
         st.Page("pages/freight_payment.py", title="จ่ายค่าขนส่ง", icon="🚛"),
-    ]
-
-# สิทธิ์ผู้จัดการและเจ้าของ สำหรับงานบริหาร จัดการสต็อกด้วยมือ และดูรายงาน
-if role in ["manager", "admin"]:
-    pages += [
         st.Page("pages/manual_adjustment.py", title="ปรับยอดสต็อกด้วยมือ", icon="🔧"),
-        st.Page("pages/dashboard.py", title="แดชบอร์ด", icon="📊"),
+        st.Page("pages/dashboard.py", title="แดชบอร์ดผู้บริหาร", icon="📊"),
         st.Page("pages/report_sales.py", title="รายงานการขาย/กำไร/ภาษี", icon="📈"),
         st.Page("pages/report_freight.py", title="รายงานค่าขนส่ง/ค่าปรับ", icon="📉"),
         st.Page("pages/report_debtors.py", title="รายงานสถานะลูกหนี้-เจ้าหนี้", icon="📑"),
     ]
 
-# สิทธิ์เจ้าของระบบ (Admin) สำหรับการตั้งค่าโครงสร้างและผู้ใช้งานทั้งหมด
-if role == "admin":
+# 🧾 เคสที่ 3: สิทธิ์ของพนักงานเสมียนลาน (clerk)
+elif role == "clerk":
     pages += [
-        st.Page("pages/settings.py", title="ตั้งค่าระบบ", icon="⚙️"),
-        st.Page("pages/user_management.py", title="จัดการผู้ใช้", icon="👥"),
+        st.Page("pages/purchase_entry.py", title="บันทึกซื้อเข้าสิ้นวัน", icon="📥"),
+        st.Page("pages/purchase_history.py", title="ประวัติการซื้อ", icon="📋"),
+        st.Page("pages/load_order.py", title="สั่งโหลด (จองคิว)", icon="🚚"),
+        st.Page("pages/weigh_out.py", title="ชั่งออก (Weigh Out)", icon="⚖️"),
+        st.Page("pages/destination_scan.py", title="สแกนหลักฐานปลายทาง", icon="📸"),
+        st.Page("pages/sales_clearing.py", title="เคลียร์บิลปลายทาง", icon="💰"),
+        st.Page("pages/stock_balance.py", title="สต็อกคงเหลือ", icon="📦"),
+        st.Page("pages/truck_management.py", title="จัดการรถ/คนขับ", icon="🚘"),
+        st.Page("pages/receipt_entry.py", title="บันทึกเงินโอน", icon="💵"),
+        st.Page("pages/freight_payment.py", title="จ่ายค่าขนส่ง", icon="🚛"),
     ]
 
 pg = st.navigation(pages)

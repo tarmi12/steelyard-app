@@ -113,10 +113,10 @@ else:
                         "created_by": st.session_state.user_id
                     }).execute()
                     
-                    # 2. 🛠️ [แก้ไขจุดพัง] ปรับสถานะเป็น 'COMPLETED' เพื่อให้ถูกกฎเกณฑ์ Check Constraint ของฐานข้อมูลคุณ
+                    # 2. ปรับสถานะเป็น 'COMPLETED' เพื่อเคลียร์ตั๋วชั่งและส่งคิวงานตรงเข้าสู่ระบบมอนิเตอร์และบัญชีคู่ขนานอย่างสมบูรณ์
                     supabase.table("load_orders").update({"status": "COMPLETED"}).eq("id", target_lo_id).execute()
                     
-                    st.success(f"🎉 สำเร็จ! บันทึกน้ำหนักบิล {target_lo_id} เรียบร้อย สต็อกคลังจริงตัดยอดทันที และข้อมูลถูกส่งไปรอที่ระบบติดตามสถานะแล้วครับ")
+                    st.success(f"🎉 สำเร็จ! บันทึกน้ำหนักบิล LO-{target_lo_id} แล้ว ตัดสต็อกคลังจริงเรียบร้อย ยอดรถเด้งเข้าแผงมอนิเตอร์แล้วครับ")
                     st.balloons()
                     
                     st.session_state.is_weigh_out_processing = False

@@ -10,7 +10,7 @@ key = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
 try:
-    # แก้ไขจุดที่มีปัญหา: ดึงเฉพาะข้อมูลพื้นฐานจาก inventory_transactions โดยไม่ Join ข้ามไป product_types
+    # ดึงข้อมูลมาคำนวณยอดรวมยอดคงเหลือ
     tx_res = supabase.table("inventory_transactions").select("stock_type, quantity").execute()
     transactions = tx_res.data
     
@@ -35,24 +35,51 @@ with col2:
 
 st.markdown("---")
 
-# ---- 2. แสดงตารางประวัติธุรกรรมเพื่อความโปร่งใส ตรวจสอบย้อนกลับได้ ----
-st.subheader("📜 รายงานประวัติความเคลื่อนไหวสต็อก 50 รายการล่าสุด")
+# ---- 2. ปรับปรุงจุดนี้: แยกกระดานประวัติเพื่อแก้ปัญหาข้อมูลซ้ำซ้อนสายตา ----
+st.subheader("📜 รายงานประวัติความเคลื่อนไหวสต็อกล่าสุด (แยกฝั่งตรวจสอบ)")
+
 try:
+    # ดึงประวัติธุรกรรมสต็อกลึก 100 รายการล่าสุดมาเพื่อกระจายลงแท็บ
     log_query = supabase.table("inventory_transactions")\
-        .select("id, stock_type, transaction_type, quantity, transaction_date, reference_type")\
-        .order("id", desc=True).limit(50).execute()
-        
-    if not log_query.data:
-        st.info("ยังไม่มีประวัติการซื้อหรือขายในตารางธุรกรรมสต็อก")
-    else:
-        log_df = pd.DataFrame([{
-            "เลขธุรกรรม": l["id"],
-            "ระบบสต็อก": "🔴 Physical" if l["stock_type"] == "PHYSICAL" else "🔵 Reporting",
-            "ประเภทงาน": l["transaction_type"],
-            "จำนวนน้ำหนัก (kg)": f"{l['quantity']:,}",
-            "วันที่ทำรายการ": l["transaction_date"],
-            "เอกสารอ้างอิง": l["reference_type"]
-        } for l in log_query.data])
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
+        .select("id, stock_type, transaction_type, quantity, transaction_date, reference_type, reference_id")\
+        .order("id", desc=True).limit(100).execute()
+    
+    raw_logs = log_query.data
 except Exception as e:
-    st.write(f"ไม่สามารถแสดงตารางล็อกประวัติได้เนื่องจาก: {e}")
+    st.error(f"ไม่สามารถดึงล็อกประวัติได้: {e}")
+    raw_logs = []
+
+# แยกค่ายอดล็อกออกตามประเภทสต็อกคู่
+phys_logs = [l for l in raw_logs if l["stock_type"] == "PHYSICAL"]
+rep_logs = [l for l in raw_logs if l["stock_type"] == "REPORTING"]
+
+# สร้างแท็บให้เสมียนกดเลือกดูอย่างชัดเจน
+tab_p, tab_r = st.tabs(["🔴 ประวัติสต็อกกองจริงหน้าลาน (Physical)", "🔵 ประวัติสต็อกบัญชี/ภาษี (Reporting)"])
+
+with tab_p:
+    if not phys_logs:
+        st.info("ยังไม่มีประวัติความเคลื่อนไหวในระบบสต็อก Physical")
+    else:
+        df_p = pd.DataFrame([{
+            "เลขธุรกรรม": l["id"],
+            "ประเภทงาน": "📥 ซื้อเหล็กเข้า" if l["transaction_type"] == "PURCHASE" else ("📤 ชั่งออกขาย" if l["transaction_type"] == "SALE" else "🔧 ปรับยอดมือ"),
+            "น้ำหนัก ข้อมูล (kg)": f"{l['quantity']:,}",
+            "วันที่ทำรายการ": l["transaction_date"],
+            "ประเภทเอกสาร": l["reference_type"],
+            "เลขที่เอกสารอ้างอิง": f"ID-{l['reference_id']}" if l['reference_id'] else "-"
+        } for l in phys_logs])
+        st.dataframe(df_p, use_container_width=True, hide_index=True)
+
+with tab_r:
+    if not rep_logs:
+        st.info("ยังไม่มีประวัติความเคลื่อนไหวในระบบสต็อก Reporting")
+    else:
+        df_r = pd.DataFrame([{
+            "เลขธุรกรรม": l["id"],
+            "ประเภทงาน": "📥 ซื้อเหล็กเข้า" if l["transaction_type"] == "PURCHASE" else ("📤 เคลียร์บิลขายจบ" if l["transaction_type"] == "SALE" else "🔧 ปรับยอดมือ"),
+            "น้ำหนัก บัญชี (kg)": f"{l['quantity']:,}",
+            "วันที่ทำรายการ": l["transaction_date"],
+            "ประเภทเอกสาร": l["reference_type"],
+            "เลขที่เอกสารอ้างอิง": f"ID-{l['reference_id']}" if l['reference_id'] else "-"
+        } for l in rep_logs])
+        st.dataframe(df_r, use_container_width=True, hide_index=True)

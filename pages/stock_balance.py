@@ -10,15 +10,10 @@ key = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
 try:
-    # ดึงข้อมูลประวัติการทำรายการสต็อกทั้งหมด
+    # แก้ไขจุดที่มีปัญหา: ดึงเฉพาะข้อมูลพื้นฐานจาก inventory_transactions โดยไม่ Join ข้ามไป product_types
     tx_res = supabase.table("inventory_transactions").select("stock_type, quantity").execute()
     transactions = tx_res.data
     
-    # ดึงจำนวนสต็อกแยกรายประเภทสินค้ามาสรุปผลตาราง
-    stock_detail_res = supabase.table("inventory_transactions")\
-        .select("stock_type, quantity, reference_type, product_types(name)")\
-        .execute()
-        
 except Exception as e:
     st.error(f"ไม่สามารถคำนวณยอดสต็อกคงเหลือได้เนื่องจาก: {e}")
     transactions = []
@@ -60,4 +55,4 @@ try:
         } for l in log_query.data])
         st.dataframe(log_df, use_container_width=True, hide_index=True)
 except Exception as e:
-    st.write("ไม่สามารถแสดงตารางล็อกประวัติได้")
+    st.write(f"ไม่สามารถแสดงตารางล็อกประวัติได้เนื่องจาก: {e}")

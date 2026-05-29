@@ -3,7 +3,7 @@ import pandas as pd
 from supabase import create_client, Client
 
 st.header("🎯 ระบบติดตามสถานะคิวรถและสิ่งตกค้าง (Real-time Monitor)")
-st.info("📊 หน้าจอสรุปสถานะรถวิ่งงานในระบบ เพื่อสแกนดูได้ทันทีโดยไม่ต้องไล่ตรวจเช็คเอกสารมือ")
+st.info("📊 หน้าจอสรุปสถานะรถวิ่งงานในระบบ พร้อมรายละเอียดน้ำหนัก หนัก-เบา ทั้งต้นทางและปลายทาง")
 
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
@@ -11,13 +11,12 @@ supabase: Client = create_client(url, key)
 
 # ---- 1. ดึงข้อมูลรถที่วิ่งงานค้างทั้งหมดในระบบแบบยิงสอบถามครั้งเดียว (Single Query Multi-Join) ----
 try:
-    # ดึงคิวงานสั่งโหลดทั้งหมด พร้อมเชื่อมข้อมูลรถ ประเภทเหล็ก ผลชั่งออก และผลปลายทาง
     query_res = supabase.table("load_orders").select(
         "id, order_date, status, freight_mode, freight_rate, "
         "trucks(plate, driver_name, company), "
         "product_types(name), "
-        "weigh_out(id, net_weight, destination_factory_id, factories(name), "
-        "destination_weigh_in(received_weight), "
+        "weigh_out(id, gross_weight, tare_weight, net_weight, destination_factory_id, factories(name), "
+        "destination_weigh_in(received_weight, impurity_kg, net_billable_weight, remark), "
         "sales_clearing(id))"
     ).order("id", desc=True).execute()
     
@@ -35,13 +34,13 @@ except Exception as e:
 # ---- 2. แยกกลุ่มข้อมูลรถออกเป็น 3 หมวดหมู่ตามสั่งการ ----
 loading_list = []      # 1. รถที่กำลังโหลดของ
 in_transit_list = []   # 2. รถที่กำลังเดินทางไปโรงงาน
-unpaid_freight_list = [] # 3. รถที่ลงสินค้าเสร็จแล้ว (เคลียร์บิลขายแล้ว) แต่ลานยังไม่ได้จ่ายค่าขนส่ง
+unpaid_freight_list = [] # 3. รถที่ลงสินค้าเสร็จแล้ว แต่ลานยังไม่ได้จ่ายค่าขนส่ง
 
 for job in all_jobs:
     truck = job.get("trucks", {}) or {}
     product = job.get("product_types", {}) or {}
     
-    # ดึงข้อมูลการชั่งออก (ถ้ามี)
+    # ดึงข้อมูลการชั่งออก (ต้นทาง)
     wo_array = job.get("weigh_out", [])
     wo = wo_array[0] if wo_array else None
     
@@ -56,16 +55,18 @@ for job in all_jobs:
             "สินค้าที่รอโหลด": product.get("name", "-")
         })
         
-    # 🛣️ กลุ่มที่ 2: รถกำลังเดินทาง (ชั่งออกแล้ว สถานะตัดสต็อก Physical แล้ว แต่โรงงานปลายทางยังไม่เคลียร์บิล)
+    # 🛣️ กลุ่มที่ 2: รถกำลังเดินทาง (ชั่งออกแล้ว แต่โรงงานปลายทางยังไม่เคลียร์บิล)
     elif wo and not (wo.get("sales_clearing") and wo["sales_clearing"]):
-        loading_list_factory = wo.get("factories", {}) or {}
+        loading_factory = wo.get("factories", {}) or {}
         in_transit_list.append({
             "รหัสชั่งออก": f"WO-{wo['id']}",
             "ทะเบียนรถ": truck.get("plate", "-"),
             "คนขับ": truck.get("driver_name", "-"),
             "สินค้าบนรถ": product.get("name", "-"),
-            "🔴 นน.ต้นทาง (kg)": f"{wo['net_weight']:,}",
-            "โรงงานปลายทาง": loading_list_factory.get("name", "-"),
+            "โรงงานปลายทาง": loading_factory.get("name", "-"),
+            "ต้นทาง: หนัก (Gross)": f"{wo['gross_weight']:,} kg",
+            "ต้นทาง: เบา (Tare)": f"{wo['tare_weight']:,} kg",
+            "ต้นทาง: สุทธิ (Net)": f"{wo['net_weight']:,} kg",
             "วันที่ชั่งออก": job["order_date"]
         })
         
@@ -73,17 +74,24 @@ for job in all_jobs:
     elif job["status"] == "COMPLETED" and job["id"] not in paid_load_ids:
         if wo and wo.get("destination_weigh_in"):
             dest = wo["destination_weigh_in"][0]
-            loading_list_factory = wo.get("factories", {}) or {}
+            loading_factory = wo.get("factories", {}) or {}
+            
+            # คำนวณหาน้ำหนักรวมปลายทางจากตารางรับจริง (ถ้ามีเก็บ Gross/Tare ปลายทาง หรือคำนวณส่วนต่าง)
+            transit_loss = max(wo["net_weight"] - dest["received_weight"], 0) if dest["received_weight"] else 0
+            
             unpaid_freight_list.append({
                 "คิวงานหลัก": f"LO-{job['id']}",
                 "ทะเบียนรถ": truck.get("plate", "-"),
                 "คนขับ": truck.get("driver_name", "-"),
-                "บริษัทขนส่ง": truck.get("company", "-"),
-                "โรงงานที่ไปลง": loading_list_factory.get("name", "-"),
-                "🔴 นน.ต้นทาง (kg)": f"{wo['net_weight']:,}",
-                "🟢 นน.ปลายทาง (kg)": f"{dest['received_weight']:,}" if dest['received_weight'] else "-",
-                "วิธีคิดค่าขนส่ง": "เหมา" if job["freight_mode"] == "FLAT_RATE" else "ต่อตัน",
-                "เรทราคา": f"{float(job['freight_rate']):,.2f}"
+                "โรงงานที่ไปลง": loading_factory.get("name", "-"),
+                "ต้นทาง: หนัก (Gross)": f"{wo['gross_weight']:,} kg",
+                "ต้นทาง: เบา (Tare)": f"{wo['tare_weight']:,} kg",
+                "ต้นทาง: สุทธิ (Net)": f"{wo['net_weight']:,} kg",
+                "ปลายทาง: รับจริง (Net)": f"{dest['received_weight']:,} kg" if dest['received_weight'] else "-",
+                "น้ำหนักขาดระหว่างทาง": f"{transit_loss:,} kg",
+                "หักสิ่งเจือปน (Impurity)": f"{dest['impurity_kg']:,} kg",
+                "ปลายทาง: คิดเงินสุทธิ": f"{dest['net_billable_weight']:,} kg" if dest['net_billable_weight'] else "-",
+                "วิธีจ่าย/เรทรถ": f"{'เหมา' if job['freight_mode'] == 'FLAT_RATE' else 'ต่อตัน'} @ {float(job['freight_rate']):,.2f}"
             })
 
 # ---- 3. จัดทำหน้าต่างแสดงผลแยก 3 แผงควบคุม (Tabs) ----
@@ -101,16 +109,16 @@ with tab1:
         st.dataframe(pd.DataFrame(loading_list), use_container_width=True, hide_index=True)
 
 with tab2:
-    st.subheader("🚛 รายการรถเหล็กวิ่งออกจากลานแล้ว อยู่ระหว่างเดินทางไปโรงงานปลายทาง")
+    st.subheader("🚛 รายการรถเหล็กวิ่งออกจากลานแล้ว อยู่ระหว่างเดินทาง (แสดงตราชั่งต้นทาง)")
     if not in_transit_list:
         st.success("ไม่มีรถยนต์อยู่ระหว่างการเดินทาง (โรงงานปลายทางทำการเคลียร์บิลครบหมดแล้ว)")
     else:
         st.dataframe(pd.DataFrame(in_transit_list), use_container_width=True, hide_index=True)
 
 with tab3:
-    st.subheader("💸 รายการรถสิบล้อที่ส่งของถึงเป้าหมายแล้ว รอเสมียนกดทำเรื่องโอนเงินจ่ายค่าขนส่ง")
+    st.subheader("💸 รายการรถสิบล้อที่ลงของจบแล้ว เปรียบเทียบน้ำหนักต้นทาง-ปลายทาง (รอจ่ายเงิน)")
     if not unpaid_freight_list:
         st.success("อนุมัติจ่ายเงินค่าน้ำมันและค่าขนส่งครบถ้วนแล้ว ไม่มีรายการค้างจ่าย")
     else:
+        # ปรับการแสดงผลคอลัมน์ให้กว้างสะใจเพื่อให้เห็นตัวเลขน้ำหนักเทียบกันชัดๆ
         st.dataframe(pd.DataFrame(unpaid_freight_list), use_container_width=True, hide_index=True)
-        st.caption("💡 แนะนำ: คุณสามารถไปตรวจสอบรายละเอียดตัวเลขส่วนหักค่าปรับอย่างละเอียดได้ที่เมนู 'จ่ายค่าขนส่ง'")

@@ -22,11 +22,11 @@ with col_f2:
 st.markdown("---")
 
 try:
-    # 📥 ----------------------------------------------------
-    # ดึงและคำนวณฝั่งขายออก (Weigh Out / Sell Value) อิงตามตารางที่มีจริงหลังบ้าน
+    # 📤 ----------------------------------------------------
+    # ดึงและคำนวณฝั่งขายออก (แก้ไข Query ถอดคอลัมน์ที่ไม่มีจริงออกเรียบร้อย)
     # ----------------------------------------------------
     wo_res = supabase.table("weigh_out")\
-        .select("id, net_weight, vat_mode, date, load_orders(product_type_id, freight_rate, price_unit), factories(name)")\
+        .select("id, net_weight, date, load_orders(product_type_id, freight_rate), factories(name)")\
         .gte("date", str(start_date))\
         .lte("date", str(end_date))\
         .execute()
@@ -43,15 +43,18 @@ try:
         net_kg = int(wo.get("net_weight", 0) or 0)
         lo_data = wo.get("load_orders", {}) or {}
         
-        # ค้นหาราคาขายที่ตกลงกันไว้ในใบสั่งโหลด
-        price_unit = lo_data.get("price_unit", "PER_TON")
+        # ดึงพิกัดราคาขายที่ตั้งไว้จากใบงานสั่งโหลด
         price_rate = float(lo_data.get("freight_rate", 0) or 0)
         
-        # 🌟 สูตรแปลงหน่วยอัจฉริยะ: กิโลกรัม -> ตัน -> คูณเงินบาท
-        if price_unit == "PER_TON":
+        # 🌟 ระบบ Auto-Unit Detection ดักจับและคำนวณราคาป้องกันเงินมั่วอัจฉริยะ
+        if price_rate >= 1000:
+            # ถ้าราคาที่ตั้งไว้เกิน 1,000 แปลว่าเป็น "บาทต่อตัน" แน่นอน -> หาร 1,000 เพื่อแปลงกิโลกรัมเป็นตันก่อนคูณ
             amount_baht = (net_kg / 1000) * price_rate
+            unit_text = "บาท / ตัน"
         else:
+            # ถ้าราคาเป็นหลักสิบหลักร้อย แปลว่าเป็น "บาทต่อกิโลกรัม" -> คูณตรง ๆ ทันที
             amount_baht = net_kg * price_rate
+            unit_text = "บาท / kg"
             
         total_sell_kg += net_kg
         total_sell_baht += amount_baht
@@ -66,7 +69,7 @@ try:
             "ส่งโรงงานปลายทาง": fac_name,
             "ประเภทเนื้อเหล็ก": prod_name,
             "น้ำหนักสุทธิหน้าลาน (kg)": f"{net_kg:,}",
-            "ข้อตกลงราคาขาย": f"{price_rate:,} บาท / {price_unit}",
+            "ข้อตกลงราคาขาย": f"{price_rate:,} {unit_text}",
             "มูลค่าซื้อขายสุทธิ (บาท)": amount_baht
         })
 
@@ -84,13 +87,13 @@ with col_m1:
     st.metric(
         label="📦 ยอดน้ำหนักเหล็กส่งออกรวมทั้งหมด (กิโลกรัม)", 
         value=f"{total_sell_kg:,} kg",
-        delta="ปริมาณเนื้อเหล็กที่ตัดสต็อก"
+        delta="ปริมาณเนื้อเหล็กที่ตัดสต็อกคลังจริง"
     )
 with col_m2:
     st.metric(
         label="💰 ยอดมูลค่าเงินรวมที่ต้องจัดเก็บโรงงานใหญ่ (บาท)", 
         value=f"{total_sell_baht:,.2f} บาท",
-        delta="คำนวณอิงตามราคาต่อตัน/ต่อกิโลกรัมจริง"
+        delta="ประมวลผลคำนวณแยกหน่วยตัน/กิโลกรัมให้เรียบร้อย"
     )
 
 st.markdown("---")

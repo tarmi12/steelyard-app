@@ -1,165 +1,220 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date
 from supabase import create_client, Client
 
 st.set_page_config(layout="wide")
 
-st.header("📊 รายงานงบสรุปรายวัน (Daily Purchase, Sales & Freight Statement)")
-st.info("💰 ตรวจสอบกระแสเงินสดประจำวัน: เช็คยอดเงินจ่ายซื้อเหล็กเข้าลาน ยอดเงินรับจากการขายโรงงาน และยอดตั้งเบิกค่าขนส่งรถสิบล้อ")
+st.header("📊 รายงานสรุปมูลค่าเงินสดและค่าขนส่ง (Financial Detailed Statement)")
+st.info("💡 สามารถเลือกช่วงเวลาที่ต้องการตรวจสอบระบบบัญชีได้ จากนั้นระบบจะแยกรายละเอียดเงินรายวันและรายบิลออกเป็นแท็บอย่างชัดเจน")
 
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
-# ---- 1. ส่วนควบคุมตัวกรองวันที่ ----
+# ---- 1. ส่วนควบคุมคัดเลือกระยะเวลาวันที่ (Date Range Filter) ----
 col_f1, col_f2 = st.columns(2)
 with col_f1:
-    start_date = st.date_input("📆 ตั้งแต่วันที่", date(date.today().year, date.today().month, 1))
+    start_date = st.date_input("📆 ตั้งแต่วันที่ (Start Date)", date(date.today().year, date.today().month, 1))
 with col_f2:
-    end_date = st.date_input("📆 ถึงวันที่", date.today())
+    end_date = st.date_input("📆 ถึงวันที่ (End Date)", date.today())
 
 st.markdown("---")
 
-# ประกาศตัวแปรสรุปยอดรวมก้อนใหญ่ประจำช่วงเวลา
+# ฟังก์ชันช่วยแปลงฟอร์แมตวันที่จากฐานข้อมูลให้อ่านง่าย
+def format_date(d_val):
+    if not d_val: return "-"
+    return str(d_val).split("T")[0]
+
+# ตัวแปรสำหรับคำนวณสะสมยอดรวมใหญ่และสรุปรายวัน
 grand_total_buy = 0.0
 grand_total_sell = 0.0
 grand_total_freight = 0.0
-
-# ดิกรวมรายงานแยกตามวันที่
-daily_summary = {}
-
-# ทำฟังก์ชันช่วยจัดรูปแบบวันที่ให้อ่านง่าย
-def get_date_str(d_val):
-    if not d_val: return str(date.today())
-    if isinstance(d_val, str):
-        return d_val.split("T")[0]
-    return str(d_val)
+daily_pivot = {}
 
 # =====================================================
-# 📥 1. ดึงข้อมูลฝั่งซื้อเข้าลาน (พยายามดึงจากตารางซื้อมาตรฐาน)
+# 📥 ดึงข้อมูลประวัติการรับซื้อเข้าลานจริง (ตาราง purchases)
 # =====================================================
+buy_details_rows = []
 try:
-    # ค้นหาข้อมูลการรับซื้อของเข้าลาน (ดักดึงจากชื่อตารางซื้อมาตรฐาน)
-    buy_table = "purchases" # หรือเปลี่ยนเป็นชื่อตารางฝั่งซื้อจริงของพี่ เช่น buy_orders
-    buy_res = supabase.table(buy_table).select("id, net_weight, price_per_kg, date").gte("date", str(start_date)).lte("date", str(end_date)).execute()
-    
-    for b in buy_res.data:
-        b_date = get_date_str(b.get("date"))
-        kg = int(b.get("net_weight", 0) or 0)
-        p_kg = float(b.get("price_per_kg", 0) or 0)
-        value = kg * p_kg # สูตรฝั่งซื้อ: กิโลกรัม x บาทต่อกิโลกรัม
-        
-        grand_total_buy += value
-        if b_date not in daily_summary:
-            daily_summary[b_date] = {"buy": 0.0, "sell": 0.0, "freight": 0.0}
-        daily_summary[b_date]["buy"] += value
-except Exception:
-    # Safe-Mode: หากชื่อตารางซื้อในเครื่องพ่นเอเรอร์ ให้พยายามไปดึงข้อมูลจากตารางตั๋วชั่งขาเข้าทดแทนเพื่อไม่ให้โปรแกรมพัง
-    try:
-        buy_res = supabase.table("weigh_in_tickets").select("id, net_weight, price_per_kg, date").gte("date", str(start_date)).lte("date", str(end_date)).execute()
-        for b in buy_res.data:
-            b_date = get_date_str(b.get("date"))
-            kg = int(b.get("net_weight", 0) or 0)
-            p_kg = float(b.get("price_per_kg", 0) or 0)
-            value = kg * p_kg
-            grand_total_buy += value
-            if b_date not in daily_summary:
-                daily_summary[b_date] = {"buy": 0.0, "sell": 0.0, "freight": 0.0}
-            daily_summary[b_date]["buy"] += value
-    except Exception:
-        pass # ถ้าไม่มีจริงๆ ปล่อยผ่านเป็นยอดซื้อ 0 เพื่อให้ฝั่งขายทำงานต่อได้
-
-# =====================================================
-# 📤 2. ดึงข้อมูลฝั่งขายออกโรงงานใหญ่ และ 🚛 3. ค่าขนส่งสิบล้อ
-# =====================================================
-try:
-    # ดึงตั๋วชั่งออกที่มีอยู่ชัวร์ๆ หลังบ้าน
-    wo_res = supabase.table("weigh_out")\
-        .select("id, net_weight, date, load_orders(freight_rate, freight_mode, base_weight_option)")\
+    buy_res = supabase.table("purchases")\
+        .select("id, net_weight, price_per_kg, date, product_types(name)")\
         .gte("date", str(start_date))\
         .lte("date", str(end_date))\
         .execute()
         
+    for b in buy_res.data:
+        b_date = format_date(b.get("date"))
+        net_kg = int(b.get("net_weight", 0) or 0)
+        p_kg = float(b.get("price_per_kg", 0) or 0)
+        amount_baht = net_kg * p_kg # สูตรเงินสดฝั่งซื้อ
+        
+        grand_total_buy += amount_baht
+        if b_date not in daily_pivot:
+            daily_pivot[b_date] = {"buy": 0.0, "sell": 0.0, "freight": 0.0}
+        daily_pivot[b_date]["buy"] += amount_baht
+        
+        p_name = b["product_types"]["name"] if b.get("product_types") else "ไม่ระบุเกรด"
+        buy_details_rows.append({
+            "วันที่ซื้อ": b_date,
+            "เลขที่บิลซื้อ": f"P-{b['id']}",
+            "เกรดสินค้า": p_name,
+            "น้ำหนัก (kg)": net_kg,
+            "ราคา (บาท/kg)": p_kg,
+            "มูลค่าเงินจ่าย (บาท)": amount_baht
+        })
+except Exception:
+    # กรณีโครงสร้างตารางหลักของพี่ใช้ชื่อ weigh_in_tickets สำรองระบบไว้ไม่ให้พัง
+    try:
+        buy_res = supabase.table("weigh_in_tickets").select("id, net_weight, price_per_kg, date").gte("date", str(start_date)).lte("date", str(end_date)).execute()
+        for b in buy_res.data:
+            b_date = format_date(b.get("date"))
+            net_kg = int(b.get("net_weight", 0) or 0)
+            p_kg = float(b.get("price_per_kg", 0) or 0)
+            amount_baht = net_kg * p_kg
+            grand_total_buy += amount_baht
+            if b_date not in daily_pivot:
+                daily_pivot[b_date] = {"buy": 0.0, "sell": 0.0, "freight": 0.0}
+            daily_pivot[b_date]["buy"] += amount_baht
+            buy_details_rows.append({
+                "วันที่ซื้อ": b_date,
+                "เลขที่บิลซื้อ": f"WI-{b['id']}",
+                "เกรดสินค้า": "เหล็กหน้าร้าน",
+                "น้ำหนัก (kg)": net_kg,
+                "ราคา (บาท/kg)": p_kg,
+                "มูลค่าเงินจ่าย (บาท)": amount_baht
+            })
+    except Exception:
+        pass
+
+# =====================================================
+# 📤 ดึงข้อมูลประวัติการขายออก & 🚛 ค่าขนส่งสิบล้อ (ตาราง weigh_out)
+# =====================================================
+sell_details_rows = []
+try:
+    wo_res = supabase.table("weigh_out")\
+        .select("id, net_weight, date, load_orders(freight_rate, freight_mode, product_type_id), factories(name)")\
+        .gte("date", str(start_date))\
+        .lte("date", str(end_date))\
+        .execute()
+        
+    prod_res = supabase.table("product_types").select("id, name").execute()
+    prod_map = {p["id"]: p["name"] for p in prod_res.data}
+    
     for wo in wo_res.data:
-        w_date = get_date_str(wo.get("date"))
+        w_date = format_date(wo.get("date"))
         net_kg = int(wo.get("net_weight", 0) or 0)
         lo = wo.get("load_orders", {}) or {}
         
-        # 🟢 คิดมูลค่าขายออก (Auto-Unit Detection ป้องกันมั่วราคาต่อตัน/กิโลกรัม)
+        # 🟢 1. คำนวณมูลค่าเงินขายโรงงาน (Auto-Unit ดักจับราคาต่อตัน)
         sell_rate = float(lo.get("freight_rate", 0) or 0)
         if sell_rate >= 1000:
             sell_value = (net_kg / 1000) * sell_rate # คิดแบบราคาต่อตัน
+            rate_text = f"{sell_rate:,} / ตัน"
         else:
-            sell_value = net_kg * sell_rate # คิดแบบราคาต่อกิโลกรัม
+            sell_value = net_kg * sell_rate # คิดแบบราคาต่อโล
+            rate_text = f"{sell_rate:,} / kg"
             
         grand_total_sell += sell_value
-        if w_date not in daily_summary:
-            daily_summary[w_date] = {"buy": 0.0, "sell": 0.0, "freight": 0.0}
-        daily_summary[w_date]["sell"] += sell_value
+        if w_date not in daily_pivot:
+            daily_pivot[w_date] = {"buy": 0.0, "sell": 0.0, "freight": 0.0}
+        daily_pivot[w_date]["sell"] += sell_value
         
-        # 🚛 คำนวณเงินค่าขนส่งรถสิบล้อเที่ยวนี้คู่ขนานทันที
+        # 🚛 2. คำนวณเงินค่าขนส่งรถสิบล้อร่วมเดินทาง
         f_mode = lo.get("freight_mode", "PER_TON")
         if f_mode == "FLAT_RATE":
-            freight_value = sell_rate # เหมาจ่ายเงินก้อน
+            freight_value = sell_rate # เหมาเที่ยว
         else:
-            # คำนวณเรทค่าบรรทุกต่อตัน (แปลงกิโลกรัมเป็นตันก่อนคูณ)
-            freight_value = (net_kg / 1000) * sell_rate 
+            freight_value = (net_kg / 1000) * sell_rate # คิดตามน้ำหนักบรรทุกจริง (ตัน)
             
         grand_total_freight += freight_value
-        daily_summary[w_date]["freight"] += freight_value
-
+        daily_pivot[w_date]["freight"] += freight_value
+        
+        p_id = lo.get("product_type_id")
+        prod_name = prod_map.get(p_id, "ไม่ระบุประเภท")
+        fac_name = wo["factories"]["name"] if wo.get("factories") else "ไม่ระบุโรงงาน"
+        
+        sell_details_rows.append({
+            "วันที่ขาย": w_date,
+            "รหัสคิวตั๋ว": f"LO-{wo['id']}",
+            "โรงงานผู้รับซื้อ": fac_name,
+            "ประเภทเหล็ก": prod_name,
+            "น้ำหนักสุทธิ (kg)": net_kg,
+            "ราคาข้อตกลง": rate_text,
+            "💵 ยอดรับค่าเหล็ก (บาท)": sell_value,
+            "🚛 ยอดค่าขนส่งรถ (บาท)": freight_value
+        })
 except Exception as e:
-    st.error(f"ระบบไม่สามารถประมวลผลข้อมูลฝั่งขายและสิบล้อได้: {e}")
+    st.error(f"ระบบขัดข้องในการคำนวณฝั่งขาย: {e}")
 
 # =====================================================
-# 📊 4. แสดงผลแผงสรุปเม็ดเงินภาพรวม (Summary Metrics)
+# 📊 แผงควบคุมสรุปตัวเลขใหญ่สะสม (Dashboard Summary)
 # =====================================================
-st.subheader("💰 สรุปกระแสเงินหมุนเวียนก้อนรวม (ประจำช่วงเวลาที่เลือก)")
+st.subheader("💰 สรุปกระแสเงินสดก้อนกว้างประจำช่วงเวลา")
 col_m1, col_m2, col_m3 = st.columns(3)
-
 with col_m1:
-    st.metric(label="🔴 ยอดจ่ายเงินซื้อเหล็กเข้าลานรวม", value=f"{grand_total_buy:,.2f} บาท")
+    st.metric(label="🔴 รวมยอดเงินจ่ายซื้อเหล็กเข้าลาน", value=f"{grand_total_buy:,.2f} บาท")
 with col_m2:
-    st.metric(label="🟢 ยอดเงินรับส่งขายโรงงานใหญ่รวม", value=f"{grand_total_sell:,.2f} บาท")
+    st.metric(label="🟢 รวมยอดเงินรอรับจากโรงงานใหญ่", value=f"{grand_total_sell:,.2f} บาท")
 with col_m3:
-    st.metric(label="🚛 ยอดเงินค่าขนส่งสิบล้อรวมทั้งหมด", value=f"{grand_total_freight:,.2f} บาท")
+    st.metric(label="🚛 รวมงบตั้งจ่ายค่าขนส่งสิบล้อ", value=f"{grand_total_freight:,.2f} บาท")
 
 st.markdown("---")
 
 # =====================================================
-# 🗂️ 5. จัดรูปตารางแจกแจงเม็ดเงิน "รายวัน" ตามที่พี่สั่งการ
+# 🗂️ แยกกระดานการจัดแสดงผลออกเป็น 3 แท็บตามสั่งการ
 # =====================================================
-st.subheader("📅 ตารางสรุปงบซื้อ-ขาย และค่าขนส่งสิบล้อ แจกแจงเป็นรายวัน")
-st.caption("แนะนำ: บัญชีสามารถกวาดสายตาดูสรุปเม็ดเงินเป็นรายวันได้ทันที ยอดเงินบาทคำนวณสดจากตั๋วชั่งหน้าร้าน")
+tab1, tab2, tab3 = st.tabs(["📥 แท็บ 1: รายละเอียดบิลซื้อเข้าลาน", "📤 แท็บ 2: รายละเอียดขายออก & ค่าสิบล้อ", "📅 แท็บ 3: สรุปงบรวมรายวัน"])
 
-if not daily_summary:
-    st.warning("⚠️ ไม่พบข้อมูลการทำธุรกรรมซื้อ-ขายใด ๆ ในช่วงวันที่ระบุข้างต้นครับ")
-else:
-    # แปลงข้อมูล Dictionary รายวันให้กลายเป็น DataFrame เพื่อโชว์ในตารางสวยงาม
-    report_rows = []
-    # เรียงลำดับวันที่จากปัจจุบันย้อนกลับไปอดีต
-    for d_key in sorted(daily_summary.keys(), reverse=True):
-        day_data = daily_summary[d_key]
-        b_val = day_data["buy"]
-        s_val = day_data["sell"]
-        f_val = day_data["freight"]
-        # คำนวณส่วนต่างกำไรหลังหักต้นทุนค่าเหล็กและค่าขนส่งสิบล้อประจำวัน
-        net_profit = s_val - b_val - f_val
-        
-        report_rows.append({
-            "วันที่ (Date)": d_key,
-            "📥 ยอดเงินซื้อเข้าลาน (บาท)": b_val,
-            "📤 ยอดเงินขายส่งโรงงาน (บาท)": s_val,
-            "🚛 ค่าขนส่งสิบล้อ (บาท)": f_val,
-            "📊 ผลต่างกำไรสุทธิลาน (บาท)": net_profit
-        })
-        
-    df_report = pd.DataFrame(report_rows)
-    
-    # จัดฟอร์แมตตัวเลขในตารางให้แสดงเป็นเงินบาททศนิยม 2 ตำแหน่งให้ชัดเจน อ่านง่าย ไม่มั่ว
-    for col in df_report.columns:
-        if col != "วันที่ (Date)":
-            df_report[col] = df_report[col].map('{:,.2f}'.format)
+# ---- แท็บที่ 1: รายละเอียดบิลฝั่งซื้อเข้าลาน ----
+with tab1:
+    st.subheader("📥 ตารางแจกแจงประวัติการจ่ายเงินซื้อเหล็กหน้าร้าน (รายบิล)")
+    if not buy_details_rows:
+        st.warning("⚠️ ไม่พบตั๋วข้อมูลการรับซื้อของเข้าลานในช่วงวันที่เลือก")
+    else:
+        df_details_buy = pd.DataFrame(buy_details_rows)
+        # จัดฟอร์แมตตัวเลขให้อ่านง่าย
+        df_details_buy["น้ำหนัก (kg)"] = df_details_buy["น้ำหนัก (kg)"].map('{:,}'.format)
+        df_details_buy["ราคา (บาท/kg)"] = df_details_buy["ราคา (บาท/kg)"].map('{:,.2f}'.format)
+        df_details_buy["มูลค่าเงินจ่าย (บาท)"] = df_details_buy["มูลค่าเงินจ่าย (บาท)"].map('{:,.2f}'.format)
+        st.dataframe(df_details_buy, use_container_width=True, hide_index=True)
+
+# ---- แท็บที่ 2: รายรายละเอียดฝั่งขายออกโรงงานคู่ขนานสิบล้อ ----
+with tab2:
+    st.subheader("📤 ตารางแจกแจงใบตั๋วชั่งออกส่งขายโรงงานใหญ่ และ ค่าขนส่งสิบล้อ (รายคันรถ)")
+    if not sell_details_rows:
+        st.warning("⚠️ ไม่พบประวัติตั๋วรถวิ่งสินค้าออกลานในช่วงวันที่เลือก")
+    else:
+        df_details_sell = pd.DataFrame(sell_details_rows)
+        df_details_sell["น้ำหนักสุทธิ (kg)"] = df_details_sell["น้ำหนักสุทธิ (kg)"].map('{:,}'.format)
+        df_details_sell["💵 ยอดรับค่าเหล็ก (บาท)"] = df_details_sell["💵 ยอดรับค่าเหล็ก (บาท)"].map('{:,.2f}'.format)
+        df_details_sell["🚛 ยอดค่าขนส่งรถ (บาท)"] = df_details_sell["🚛 ยอดค่าขนส่งรถ (บาท)"].map('{:,.2f}'.format)
+        st.dataframe(df_details_sell, use_container_width=True, hide_index=True)
+
+# ---- แท็บที่ 3: ตารางงบกระแสรวมรายวันบรรทัดเดียว ----
+with tab3:
+    st.subheader("📅 งบสรุปภาพรวมรายได้-รายจ่าย และผลต่างกำไรประจำวัน")
+    if not daily_pivot:
+        st.warning("⚠️ ไม่มีข้อมูลการทำธุรกรรมหมุนเวียนเงินในช่วงวันที่เลือก")
+    else:
+        pivot_rows = []
+        for day in sorted(daily_pivot.keys(), reverse=True):
+            b_day = daily_pivot[day]["buy"]
+            s_day = daily_pivot[day]["sell"]
+            f_day = daily_pivot[day]["freight"]
+            profit_day = s_day - b_day - f_day # ผลต่างกำไรรายวันสุทธิ
             
-    st.dataframe(df_report, use_container_width=True, hide_index=True)
+            pivot_rows.append({
+                "วันที่สรุปยอด": day,
+                "🔴 ยอดซื้อเข้าลาน (บาท)": b_day,
+                "📤 ยอดขายส่งโรงงาน (บาท)": s_day,
+                "🚛 งบค่าน้ำมันสิบล้อ (บาท)": f_day,
+                "📊 ผลกำไรลานสุทธิ (บาท)": profit_day
+            })
+            
+        df_pivot = pd.DataFrame(pivot_rows)
+        # เติมคอมม่าตัวเลขการเงินทุกช่องเพื่อความชัดเจน
+        for col in df_pivot.columns:
+            if col != "วันที่สรุปยอด":
+                df_pivot[col] = df_pivot[col].map('{:,.2f}'.format)
+        st.dataframe(df_pivot, use_container_width=True, hide_index=True)

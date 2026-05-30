@@ -90,6 +90,7 @@ if role == "admin":
         st.Page("pages/report_sales.py", title="รายงานการขาย/กำไร/ภาษี", icon="📈"),
         st.Page("pages/report_freight.py", title="รายงานค่าขนส่ง/ค่าปรับ", icon="📉"),
         st.Page("pages/report_debtors.py", title="รายงานสถานะลูกหนี้-เจ้าหนี้", icon="📑"),
+        st.Page("pages/sales_value_report.py", title="รายงานมูลค่าซื้อ-ขาย/กำไร", icon="📊"),
         
         # --- หมวดหมู่ควบคุมระบบนโยบาย ---
         st.Page("pages/settings.py", title="ตั้งค่าระบบ", icon="⚙️"),
